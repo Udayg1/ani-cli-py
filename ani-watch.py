@@ -252,17 +252,19 @@ def main():
                 # print(link)
                 final_link = get_real_link(link)
                 # print(final_link)
-                play_link = get_streamurl(final_link[0][0])
+                play_link = get_streamurl(final_link)
                 thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
                 thr.start()
                 thr.join()
                 thr.terminate()
                 if OUT['time']/OUT['dur'] >= 0.9:
                     modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
-                    if last +2 < int(total_ep)-1:
+                    if last +1 < int(total_ep)-1:
                         epAvailableForlast = True
                     else:
                         epAvailableForlast = False
+                        print("-> No new episodes available.")
+
                 else:
                     epAvailableForlast = False
                     print('-> Skipping to update the episode.')
