@@ -176,8 +176,10 @@ def mpv_player(link):
     player.wait_for_playback()
 
 def main():
+    play_link = ''
     last_option = ''
     epAvailableForlast = False
+    cached = False
     while True:
         data = get_anilist_user_data()
         if not epAvailableForlast:
@@ -247,14 +249,20 @@ def main():
             else:
                 total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']['episode']
             if last < int(total_ep)-1:
-                link = get_url([choice["_id"], last+1])
+                if not cached:
+                    link = get_url([choice["_id"], last+1])
+                    final_link = get_real_link(link)
+                    play_link = get_streamurl(final_link[0][0])
                 print(f'-> Playing Episode {last+1}')
                 # print(link)
-                final_link = get_real_link(link)
                 # print(final_link)
-                play_link = get_streamurl(final_link)
                 thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
                 thr.start()
+                if last +1 < int(total_ep)-1:
+                    link = get_url([choice["_id"], last+2])
+                    final_link = get_real_link(link)
+                    play_link = get_streamurl(final_link[0][0])
+                    cached = True
                 thr.join()
                 thr.terminate()
                 if OUT['time']/OUT['dur'] >= 0.9:
@@ -264,7 +272,6 @@ def main():
                     else:
                         epAvailableForlast = False
                         print("-> No new episodes available.")
-
                 else:
                     epAvailableForlast = False
                     print('-> Skipping to update the episode.')
