@@ -84,6 +84,7 @@ query Media($userId: Int, $type: MediaType, $status: MediaListStatus) {
           title {
             english
           }
+          synonyms
         }
         id
       }
@@ -219,6 +220,10 @@ def main():
             shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english'])["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
+            shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['synonyms'][0])["data"]["shows"]["edges"]
+            file_write_flag = True
+        if not shows:
+            # print(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['synonyms'])
             print("-> No result found for the query.")
         else:
             if file_write_flag:
