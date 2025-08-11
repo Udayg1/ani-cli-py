@@ -249,7 +249,7 @@ def main():
             else:
                 total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']['episode'])-1
             if last < total_ep:
-                if cached:
+                if not cached:
                     link = get_url([choice["_id"], last+1])
                     cached = False
                 final_link = get_real_link(link)
