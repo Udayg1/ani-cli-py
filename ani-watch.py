@@ -176,7 +176,7 @@ def mpv_player(link):
     player.wait_for_playback()
 
 def main():
-    play_link = ''
+    link = ''
     last_option = ''
     epAvailableForlast = False
     cached = False
@@ -245,29 +245,29 @@ def main():
             # print(choice['availableEpisodes']['sub'])
             total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']
             if not total_ep:
-                total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['episodes'])+1
+                total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['episodes'])
             else:
-                total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']['episode']
-            if last < int(total_ep)-1:
-                if not cached:
+                total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']['episode'])-1
+            if last < total_ep:
+                if cached:
                     link = get_url([choice["_id"], last+1])
-                    final_link = get_real_link(link)
-                    play_link = get_streamurl(final_link[0][0])
+                    cached = False
+                final_link = get_real_link(link)
+                link = ''
+                play_link = get_streamurl(final_link[0][0])
                 print(f'-> Playing Episode {last+1}')
                 # print(link)
                 # print(final_link)
                 thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
                 thr.start()
-                if last +1 < int(total_ep)-1:
+                if last +1 < total_ep:
                     link = get_url([choice["_id"], last+2])
-                    final_link = get_real_link(link)
-                    play_link = get_streamurl(final_link[0][0])
                     cached = True
                 thr.join()
                 thr.terminate()
                 if OUT['time']/OUT['dur'] >= 0.9:
                     modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
-                    if last +1 < int(total_ep)-1:
+                    if last +1 < total_ep:
                         epAvailableForlast = True
                     else:
                         epAvailableForlast = False
