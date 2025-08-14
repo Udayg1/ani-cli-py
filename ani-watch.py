@@ -7,7 +7,6 @@ PATH = os.path.expanduser("~")+"/.local/share/ani-watch/"
 ANILIST_URL="https://graphql.anilist.co"
 ANILIST_USER = ''
 CLIENT_ID = "28320"
-CLIENT_SECRET = "jC9CMYQtj9iy9LoySHVc0MYbSI5N0MNVbVUrbvlW"
 TOKEN = ""
 HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
 URL = "https://api.allanime.day/api"
@@ -46,23 +45,34 @@ def get_user_id():
     # return r.json()['data']['Viewer']['id']
 
 def modify_data(_data, anime_id, last):
+    entry_id = 0
+    for i in range(len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
+        if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == anime_id:
+            entry_id = _data['data']['MediaListCollection']['lists'][0]['entries'][i]['id']
+    print(f"-> Updating progess to {last}\n")
     status = 'CURRENT'
     total = getEpsWhenComplete(_data,anime_id)
     if last >= total:
         last = total
         status = 'COMPLETED'
-    print(f"-> Updating progess to {last}\n")
-    entry_id = 0
-    for i in range(len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
-        if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == anime_id:
-            entry_id = _data['data']['MediaListCollection']['lists'][0]['entries'][i]['id']
-    head = {'Authorization': f'Bearer {TOKEN}'}
-    data = {"query" : """mutation ($listEntryId: Int, $mediaId: Int, $status: MediaListStatus, $progress: Int) {
-  SaveMediaListEntry(id: $listEntryId, mediaId: $mediaId, status: $status, progress: $progress) {
+        score = input("Anime completed. Enter score: ")
+        while not score.isdigit() and 0 <= int(score) <= 10:
+            score = input("Enter a valid digit: ")
+        data = {"query": """mutation SaveMediaListEntry($saveMediaListEntryId: Int, $progress: Int, $mediaId: Int, $status: MediaListStatus, $score: Float) {
+  SaveMediaListEntry(id: $saveMediaListEntryId, progress: $progress, mediaId: $mediaId, status: $status, score: $score) {
     id
     status
-  }
-}""" , "variables": {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}'}}
+        }
+}""", "variables":  {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}', "score": {score}}}
+    else:
+        data = {"query" : """mutation ($listEntryId: Int, $mediaId: Int, $status: MediaListStatus, $progress: Int) {
+    SaveMediaListEntry(id: $listEntryId, mediaId: $mediaId, status: $status, progress: $progress) {
+        id
+        status
+    }
+    }""" , "variables": {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}'}}
+    
+    head = {'Authorization': f'Bearer {TOKEN}'}
     r = rq.post(ANILIST_URL, json=data, headers = head)
 
 def get_anilist_user_data():
@@ -177,7 +187,7 @@ def mpv_player(link):
     player.wait_for_playback()
 
 def main():
-    link = ''
+    preloaded_link = ''
     last_option = ''
     epAvailableForlast = False
     cached = False
@@ -195,9 +205,9 @@ def main():
                 ep_behind = int(total_ep) - int(prog)
                 if ep_behind:
                     if ep_behind > 1:
-                        print(str(i+1)+'.', data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english'], f'**({ep_behind} episodes behind)')
+                        print(str(i+1)+'.', f'\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}', f'**({ep_behind} episodes behind)\033[0m')
                     else:
-                        print(str(i+1)+'.', data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english'], f'**({ep_behind} episode behind)')
+                        print(str(i+1)+'.', f"\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}", f'**({ep_behind} episode behind)\033[0m')
                 else:
                     print(str(i+1)+'.', data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english'])
             valid = [str(x) for x in range(0, len(data['data']['MediaListCollection']['lists'][0]['entries'])+1)]
@@ -256,7 +266,9 @@ def main():
             if last < total_ep:
                 if not cached:
                     link = get_url([choice["_id"], last+1])
-                    cached = False
+                else : 
+                    link = preloaded_link
+                # link = get_url([choice["_id"], last+1])
                 final_link = get_real_link(link)
                 link = ''
                 play_link = get_streamurl(final_link[0][0])
@@ -266,7 +278,7 @@ def main():
                 thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
                 thr.start()
                 if last +1 < total_ep:
-                    link = get_url([choice["_id"], last+2])
+                    preloaded_link = get_url([choice["_id"], last+2])
                     cached = True
                 thr.join()
                 thr.terminate()
