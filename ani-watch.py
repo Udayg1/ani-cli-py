@@ -51,19 +51,21 @@ def modify_data(_data, anime_id, last):
             entry_id = _data['data']['MediaListCollection']['lists'][0]['entries'][i]['id']
     print(f"-> Updating progess to {last}\n")
     status = 'CURRENT'
+    out = 1
     total = getEpsWhenComplete(_data,anime_id)
     if last >= total:
         last = total
         status = 'COMPLETED'
+        out = 0
         score = input("Anime completed. Enter score: ")
-        while not score.isdigit() and 0 <= int(score) <= 10:
+        while not score.isdigit() and not 0 <= float(score) <= 10:
             score = input("Enter a valid digit: ")
         data = {"query": """mutation SaveMediaListEntry($saveMediaListEntryId: Int, $progress: Int, $mediaId: Int, $status: MediaListStatus, $score: Float) {
   SaveMediaListEntry(id: $saveMediaListEntryId, progress: $progress, mediaId: $mediaId, status: $status, score: $score) {
     id
     status
         }
-}""", "variables":  {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}', "score": {score}}}
+}""", "variables":  {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}', "score": f"{float(score)}"}}
     else:
         data = {"query" : """mutation ($listEntryId: Int, $mediaId: Int, $status: MediaListStatus, $progress: Int) {
     SaveMediaListEntry(id: $listEntryId, mediaId: $mediaId, status: $status, progress: $progress) {
@@ -74,6 +76,7 @@ def modify_data(_data, anime_id, last):
     
     head = {'Authorization': f'Bearer {TOKEN}'}
     r = rq.post(ANILIST_URL, json=data, headers = head)
+    return out
 
 def get_anilist_user_data():
     if not ANILIST_USER:
@@ -268,30 +271,37 @@ def main():
                     link = get_url([choice["_id"], last+1])
                 else : 
                     link = preloaded_link
-                # link = get_url([choice["_id"], last+1])
+                    preloaded_link = ''
+                    cached = False
+                    # link = get_url([choice["_id"], last+1])
                 final_link = get_real_link(link)
-                link = ''
-                play_link = get_streamurl(final_link[0][0])
-                print(f'-> Playing Episode {last+1}')
                 # print(link)
-                # print(final_link)
-                thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
-                thr.start()
-                if last +1 < total_ep:
-                    preloaded_link = get_url([choice["_id"], last+2])
-                    cached = True
-                thr.join()
-                thr.terminate()
-                if OUT['time']/OUT['dur'] >= 0.9:
-                    modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
+                if not final_link:
+                    print("==> Episode released but no source available.", flush=True)
+                else:
+                    # print(final_link)
+                    link = ''
+                    play_link = get_streamurl(final_link[0][0])
+                    print(f'-> Playing Episode {last+1}')
+                    thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
+                    thr.start()
                     if last +1 < total_ep:
-                        epAvailableForlast = True
+                        preloaded_link = get_url([choice["_id"], last+2])
+                        cached = True
+                    thr.join()
+                    thr.terminate()
+                    if OUT['time']/OUT['dur'] >= 0.9:
+                        result = modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
+                        if not result:
+                            epAvailableForlast = False
+                        elif last +1 < total_ep:
+                            epAvailableForlast = True
+                        else:
+                            epAvailableForlast = False
+                            print("-> No new episodes available.")
                     else:
                         epAvailableForlast = False
-                        print("-> No new episodes available.")
-                else:
-                    epAvailableForlast = False
-                    print('-> Skipping to update the episode.')
+                        print('-> Skipping to update the episode.')
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
