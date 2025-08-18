@@ -11,6 +11,8 @@ TOKEN = ""
 HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
 URL = "https://api.allanime.day/api"
 OUT = multiprocessing.Manager().dict()
+ENCRYPTED_SOURCES = ['S-mp4','Default']
+SOURCES = ['Mp4']
 
 def mkdir():
     os.system(f"mkdir -p {PATH}")
@@ -172,8 +174,10 @@ def decode_link(source):
 def get_real_link(links):
     decoded_links = []
     for i in range(len(links['data']['episode']['sourceUrls'])):
-        if links['data']['episode']['sourceUrls'][i]['sourceName'] in ['S-mp4','Default']:
-            decoded_links.append([decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl']), links['data']['episode']['sourceUrls'][i]['priority']])
+        if links['data']['episode']['sourceUrls'][i]['sourceName'] in ENCRYPTED_SOURCES:
+            decoded_links.append([get_streamurl(decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl'])), links['data']['episode']['sourceUrls'][i]['priority']])
+        elif links['data']['episode']['sourceUrls'][i]['sourceName'] in SOURCES:
+            decoded_links.append([links['data']['episode']['sourceUrls'][i]['sourceUrl'],links['data']['episode']['sourceUrls'][i]['priority']])
     return sorted(decoded_links, key=lambda x: x[1], reverse = True)
 
 
@@ -276,14 +280,14 @@ def main():
                     # link = get_url([choice["_id"], last+1])
                 final_link = get_real_link(link)
                 # print(link)
+                # print(final_link)
                 if not final_link:
                     print("==> Episode released but no source available.", flush=True)
                 else:
-                    # print(final_link)
                     link = ''
-                    play_link = get_streamurl(final_link[0][0])
+                    # play_link = get_streamurl(final_link[0][0])
                     print(f'-> Playing Episode {last+1}')
-                    thr = multiprocessing.Process(target = mpv_player, args = (play_link, ))
+                    thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], ))
                     thr.start()
                     if last +1 < total_ep:
                         preloaded_link = get_url([choice["_id"], last+2])
