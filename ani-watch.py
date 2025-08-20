@@ -184,7 +184,7 @@ def get_real_link(links):
 
 
 def mpv_player(link):
-    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/')
+    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/',hwdec='vaapi')
     player.play(link)
     player.wait_until_playing()
     global OUT
@@ -282,7 +282,7 @@ def main():
                     cached = False
                     # link = get_url([choice["_id"], last+1])
                 final_link = get_real_link(link)
-                print(link)
+                # print(link)
                 # print(final_link)
                 if not final_link:
                     print("==> Episode released but no source available.", flush=True)
