@@ -174,7 +174,9 @@ def decode_link(source):
 def get_real_link(links):
     decoded_links = []
     for i in range(len(links['data']['episode']['sourceUrls'])):
-        if links['data']['episode']['sourceUrls'][i]['sourceName'] in ENCRYPTED_SOURCES:
+        if links['data']['episode']['sourceUrls'][i]['sourceName'] == 'Yt-mp4':
+            decoded_links.append([decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl']),9])
+        elif links['data']['episode']['sourceUrls'][i]['sourceName'] in ENCRYPTED_SOURCES:
             decoded_links.append([get_streamurl(decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl'])), links['data']['episode']['sourceUrls'][i]['priority']])
         elif links['data']['episode']['sourceUrls'][i]['sourceName'] in SOURCES:
             decoded_links.append([links['data']['episode']['sourceUrls'][i]['sourceUrl'],links['data']['episode']['sourceUrls'][i]['priority']])
@@ -182,7 +184,7 @@ def get_real_link(links):
 
 
 def mpv_player(link):
-    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True)
+    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/')
     player.play(link)
     player.wait_until_playing()
     global OUT
@@ -275,11 +277,12 @@ def main():
                     link = get_url([choice["_id"], last+1])
                 else : 
                     link = preloaded_link
+                    print("==> Using prefetched episode link.")
                     preloaded_link = ''
                     cached = False
                     # link = get_url([choice["_id"], last+1])
                 final_link = get_real_link(link)
-                # print(link)
+                print(link)
                 # print(final_link)
                 if not final_link:
                     print("==> Episode released but no source available.", flush=True)
