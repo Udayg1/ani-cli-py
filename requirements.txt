@@ -1,3 +1,4 @@
 requests
 mpv
 pypresence
+# install libmpv as well. Open https://mpv.io/installation/ and use according to the platform you need.

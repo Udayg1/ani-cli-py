@@ -198,12 +198,17 @@ def mpv_player(link):
 
 def main():
     rpc = pypresence.Presence(DISCORD_CLIENT)
+    connected = False
     preloaded_link = ''
     last_option = ''
     epAvailableForlast = False
     cached = False
-    rpc.connect()
     while True:
+        try:
+            rpc.connect()
+            connected = True
+        except:
+            connected = False
         data = get_anilist_user_data()
         if not epAvailableForlast:
             print()
@@ -295,7 +300,8 @@ def main():
                     print(f'-> Playing Episode {last+1}')
                     thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], ))
                     thr.start()
-                    rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
+                    if connected:
+                        rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
                     if last +1 < total_ep:
                         preloaded_link = get_url([choice["_id"], last+2])
                         cached = True
@@ -316,7 +322,8 @@ def main():
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
-    rpc.close()
+        if connected:
+            rpc.close()
 
 auth_token_read()
 main()
