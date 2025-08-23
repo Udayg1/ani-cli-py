@@ -289,36 +289,39 @@ def main():
                     preloaded_link = ''
                     cached = False
                     # link = get_url([choice["_id"], last+1])
-                final_link = get_real_link(link)
                 # print(link)
                 # print(final_link)
-                if not final_link:
+                if not link['data']['episode']:
                     print("==> Episode released but no source available.", flush=True)
                 else:
-                    link = ''
-                    # play_link = get_streamurl(final_link[0][0])
-                    print(f'-> Playing Episode {last+1}')
-                    thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], ))
-                    thr.start()
-                    if connected:
-                        rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
-                    if last +1 < total_ep:
-                        preloaded_link = get_url([choice["_id"], last+2])
-                        cached = True
-                    thr.join()
-                    thr.terminate()
-                    if OUT['time']/OUT['dur'] >= 0.9:
-                        result = modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
-                        if not result:
-                            epAvailableForlast = False
-                        elif last +1 < total_ep:
-                            epAvailableForlast = True
+                    final_link = get_real_link(link)
+                    if not final_link:
+                        print("==> Episode released but no source available.", flush=True)
+                    else:
+                        link = ''
+                        # play_link = get_streamurl(final_link[0][0])
+                        print(f'-> Playing Episode {last+1}')
+                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], ))
+                        thr.start()
+                        if connected:
+                            rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
+                        if last +1 < total_ep:
+                            preloaded_link = get_url([choice["_id"], last+2])
+                            cached = True
+                        thr.join()
+                        thr.terminate()
+                        if OUT['time']/OUT['dur'] >= 0.9:
+                            result = modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
+                            if not result:
+                                epAvailableForlast = False
+                            elif last +1 < total_ep:
+                                epAvailableForlast = True
+                            else:
+                                epAvailableForlast = False
+                                print("-> No new episodes available.")
                         else:
                             epAvailableForlast = False
-                            print("-> No new episodes available.")
-                    else:
-                        epAvailableForlast = False
-                        print('-> Skipping to update the episode.')
+                            print('-> Skipping to update the episode.')
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
