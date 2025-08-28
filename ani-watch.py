@@ -12,7 +12,7 @@ TOKEN = ""
 HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
 URL = "https://api.allanime.day/api"
 OUT = multiprocessing.Manager().dict()
-ENCRYPTED_SOURCES = ['S-mp4','Default']
+ENCRYPTED_SOURCES = ['Default','S-mp4']
 SOURCES = ['Mp4']
 
 def mkdir():
@@ -147,8 +147,14 @@ def get_url(data):
 
 def get_streamurl(link):
     r = rq.get(f"https://allanime.day{link}", headers = HEADER)
-    # print(r.text)
-    return r.json()['links'][0]['link']
+    link = dict(r.json().get('links', None)[0]).get('link', None)
+    if link is not None and link.endswith("master.m3u8"):
+        nr = rq.get(link, headers = HEADER)
+        link = nr.text.split()[2].split('/')[:-1]
+        link.pop(2)
+        link = '/'.join(link)
+    print(link)
+    return link
 
 def decode_link(source):
     hex_map = {
@@ -175,17 +181,20 @@ def decode_link(source):
 def get_real_link(links):
     decoded_links = []
     for i in range(len(links['data']['episode']['sourceUrls'])):
+        real_final_link = []
         if links['data']['episode']['sourceUrls'][i]['sourceName'] == 'Yt-mp4':
-            decoded_links.append([decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl']),9])
+            real_final_link = [decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl']),9]
         elif links['data']['episode']['sourceUrls'][i]['sourceName'] in ENCRYPTED_SOURCES:
-            decoded_links.append([get_streamurl(decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl'])), links['data']['episode']['sourceUrls'][i]['priority']])
+            real_final_link = [get_streamurl(decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl'])), links['data']['episode']['sourceUrls'][i]['priority']]
         elif links['data']['episode']['sourceUrls'][i]['sourceName'] in SOURCES:
-            decoded_links.append([links['data']['episode']['sourceUrls'][i]['sourceUrl'],links['data']['episode']['sourceUrls'][i]['priority']])
+            real_final_link = [links['data']['episode']['sourceUrls'][i]['sourceUrl'],links['data']['episode']['sourceUrls'][i]['priority']]
+        if len(real_final_link) == 2 and real_final_link[0] is not None:
+            decoded_links.append(real_final_link)
     return sorted(decoded_links, key=lambda x: x[1], reverse = True)
 
 
-def mpv_player(link):
-    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/',hwdec='vaapi')
+def mpv_player(link,title):
+    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/',hwdec='vaapi', title=title)
     player.play(link)
     player.wait_until_playing()
     global OUT
@@ -290,18 +299,18 @@ def main():
                     cached = False
                     # link = get_url([choice["_id"], last+1])
                 # print(link)
-                # print(final_link)
                 if not link['data']['episode']:
                     print("==> Episode released but no source available.", flush=True)
                 else:
                     final_link = get_real_link(link)
+                    print(final_link)
                     if not final_link:
                         print("==> Episode released but no source available.", flush=True)
                     else:
                         link = ''
                         # play_link = get_streamurl(final_link[0][0])
                         print(f'-> Playing Episode {last+1}')
-                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], ))
+                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',))
                         thr.start()
                         if connected:
                             rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
@@ -329,4 +338,7 @@ def main():
             rpc.close()
 
 auth_token_read()
-main()
+try:
+    main()
+except KeyboardInterrupt:
+    pass
