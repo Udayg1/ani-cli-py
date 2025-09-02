@@ -232,6 +232,7 @@ def main():
     epAvailableForlast = False
     cached = False
     while True:
+        thread_exitflag.clear()
         valid = []
         discord_thread = threading.Thread(target = discord_connector, args = (thread_exitflag,lock, ))
         discord_thread.start()
@@ -303,7 +304,7 @@ def main():
                     choice = input(">>> ").strip()
                 if choice == "0":
                     if discord_thread.is_alive():
-                        discord_thread.terminate()
+                        thread_exitflag.is_set()
                     sys.exit()
                 choice = shows[int(choice)-1]
             else:
