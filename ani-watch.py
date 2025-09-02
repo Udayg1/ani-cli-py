@@ -1,7 +1,7 @@
 import requests as rq
 import json
 import mpv
-import os, sys, multiprocessing, pypresence
+import os, sys, multiprocessing, pypresence, threading, time
 
 PATH = os.path.expanduser("~")+"/.local/share/ani-watch/"
 ANILIST_URL="https://graphql.anilist.co"
@@ -12,6 +12,7 @@ TOKEN = ""
 HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
 URL = "https://api.allanime.day/api"
 OUT = multiprocessing.Manager().dict()
+RPC = pypresence.Presence(DISCORD_CLIENT)
 ENCRYPTED_SOURCES = ['Default','S-mp4']
 SOURCES = ['Mp4']
 
@@ -19,6 +20,7 @@ def mkdir():
     os.system(f"mkdir -p {PATH}")
     os.system(f"touch {PATH+'info.txt'}")
     os.system(f'touch {PATH+'token.txt'}')
+
 def search_anime(query):
     query = "+".join(query.strip().split())
     payload = {"variables":f'{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{query}"}},"limit":40,"page":1,"translationType":"sub","countryOrigin":"ALL"}}', "query":"query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } } }"}
@@ -153,7 +155,7 @@ def get_streamurl(link):
         link = nr.text.split()[2].split('/')[:-1]
         link.pop(2)
         link = '/'.join(link)
-    print(link)
+    # print(link)
     return link
 
 def decode_link(source):
@@ -205,24 +207,47 @@ def mpv_player(link,title):
             OUT['time'] = value
     player.wait_for_playback()
 
+def discord_connector(thread_exitflag,lock):
+    global RPC
+    with lock:
+        while not thread_exitflag.is_set():
+            try:
+                # print(len(list(RPC)))
+                RPC.connect()
+                break
+            except:
+                time.sleep(1)
+
+def discord_updator(thread_exitflag, lock, message):
+    global RPC
+    with lock:
+        RPC.update(state = message)
+
 def main():
-    rpc = pypresence.Presence(DISCORD_CLIENT)
     connected = False
+    thread_exitflag = threading.Event()
     preloaded_link = ''
     last_option = ''
+    lock = threading.Lock()
     epAvailableForlast = False
     cached = False
     while True:
-        try:
-            rpc.connect()
-            connected = True
-        except:
-            connected = False
+        valid = []
+        discord_thread = threading.Thread(target = discord_connector, args = (thread_exitflag,lock, ))
+        discord_thread.start()
         data = get_anilist_user_data()
         if not epAvailableForlast:
+            preloaded_link = ''
+            cached = False
             print()
             ep_behind = 0
-            for i in range(0, len(data['data']['MediaListCollection']['lists'][0]['entries'])):
+            anilist_entries = len(data['data']['MediaListCollection']['lists'][0]['entries'])
+            if not anilist_entries:
+                print("No anime entry found in the anilist account. Please add some before proceeding.")
+                if discord_thread.is_alive():
+                    thread_exitflag.set()
+                sys.exit()
+            for i in range(0, anilist_entries):
                 prog = data['data']['MediaListCollection']['lists'][0]['entries'][i]['progress']
                 if not data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['nextAiringEpisode']:
                     total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes']
@@ -236,12 +261,15 @@ def main():
                         print(str(i+1)+'.', f"\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}", f'**({ep_behind} episode behind)\033[0m')
                 else:
                     print(str(i+1)+'.', data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english'])
-            valid = [str(x) for x in range(0, len(data['data']['MediaListCollection']['lists'][0]['entries'])+1)]
+                valid.append(str(i))
+            valid.append(str(anilist_entries))
             print("\nEnter anime number (0 - exit): ")
             query = input(">>> ")
             while query not in valid:
                 query = input(">>> ")
             if int(query) == 0:
+                if discord_thread.is_alive():
+                    thread_exitflag.set()
                 sys.exit()
             last_option = query
             query = int(query) -1
@@ -274,6 +302,8 @@ def main():
                 while choice not in valid:
                     choice = input(">>> ").strip()
                 if choice == "0":
+                    if discord_thread.is_alive():
+                        discord_thread.terminate()
                     sys.exit()
                 choice = shows[int(choice)-1]
             else:
@@ -303,7 +333,7 @@ def main():
                     print("==> Episode released but no source available.", flush=True)
                 else:
                     final_link = get_real_link(link)
-                    print(final_link)
+                    # print(final_link)
                     if not final_link:
                         print("==> Episode released but no source available.", flush=True)
                     else:
@@ -312,8 +342,8 @@ def main():
                         print(f'-> Playing Episode {last+1}')
                         thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',))
                         thr.start()
-                        if connected:
-                            rpc.update(state = f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
+                        if not discord_thread.is_alive():
+                            discord_updator(thread_exitflag, lock, f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
                         if last +1 < total_ep:
                             preloaded_link = get_url([choice["_id"], last+2])
                             cached = True
@@ -334,8 +364,11 @@ def main():
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
-        if connected:
-            rpc.close()
+
+        if not discord_thread.is_alive():
+            RPC.close()
+        else:
+            thread_exitflag.set()
 
 auth_token_read()
 try:
