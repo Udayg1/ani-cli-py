@@ -35,8 +35,9 @@ def get_last_ep(_data, _id):
 def getEpsWhenComplete(_data,anime_id):
     for i in range(0, len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
         if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == anime_id:
-            return int(_data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes'])
-
+            if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes'] is not None:
+                return int(_data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes'])
+            return None
 def get_user_id():
     head = {'Authorization': f'Bearer {TOKEN}'}
     data = {"query" : '''query {
@@ -58,7 +59,7 @@ def modify_data(_data, anime_id, last):
     status = 'CURRENT'
     out = 1
     total = getEpsWhenComplete(_data,anime_id)
-    if last >= total:
+    if total is not None and last >= total:
         last = total
         status = 'COMPLETED'
         out = 0
@@ -234,7 +235,7 @@ def main():
     while True:
         thread_exitflag.clear()
         valid = []
-        discord_thread = threading.Thread(target = discord_connector, args = (thread_exitflag,lock, ))
+        discord_thread = threading.Thread(target = discord_connector, args = (thread_exitflag,lock, ), daemon=True)
         discord_thread.start()
         data = get_anilist_user_data()
         if not epAvailableForlast:
