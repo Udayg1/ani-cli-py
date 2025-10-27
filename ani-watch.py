@@ -145,6 +145,7 @@ def update_idfile(file_data):
 
 def get_url(data):
     payload = {"variables":f'{{"showId":"{data[0]}","translationType":"sub","episodeString":"{data[1]}"}}', "query": """query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}"""}
+    # print(payload)
     r = rq.get(URL, headers = HEADER, params=payload)
     return r.json()
 
@@ -248,7 +249,7 @@ def main():
                 print("No anime entry found in the anilist account. Please add some before proceeding.")
                 if discord_thread.is_alive():
                     thread_exitflag.set()
-                sys.exit()
+                return
             for i in range(0, anilist_entries):
                 prog = data['data']['MediaListCollection']['lists'][0]['entries'][i]['progress']
                 if not data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['nextAiringEpisode']:
@@ -272,7 +273,7 @@ def main():
             if int(query) == 0:
                 if discord_thread.is_alive():
                     thread_exitflag.set()
-                sys.exit()
+                return
             last_option = query
             query = int(query) -1
             print()
@@ -306,7 +307,7 @@ def main():
                 if choice == "0":
                     if discord_thread.is_alive():
                         thread_exitflag.is_set()
-                    sys.exit()
+                    return
                 choice = shows[int(choice)-1]
             else:
                 choice = {}
@@ -332,11 +333,15 @@ def main():
                     # link = get_url([choice["_id"], last+1])
                 # print(link)
                 if not link['data']['episode']:
+                    epAvailableForlast = False
+                    cached = False
                     print("==> Episode released but no source available.", flush=True)
                 else:
                     final_link = get_real_link(link)
                     # print(final_link)
                     if not final_link:
+                        cached = False
+                        epAvailableForlast = False
                         print("==> Episode released but no source available.", flush=True)
                     else:
                         link = ''
