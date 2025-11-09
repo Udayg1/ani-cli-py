@@ -18,8 +18,8 @@ SOURCES = ['Mp4']
 
 def mkdir():
     os.system(f"mkdir -p {PATH}")
-    os.system(f"touch {PATH+'info.txt'}")
-    os.system(f'touch {PATH+'token.txt'}')
+    os.system(f"touch {PATH}info.txt")
+    os.system(f'touch {PATH}token.txt')
 
 def search_anime(query):
     query = "+".join(query.strip().split())
@@ -48,7 +48,6 @@ def get_user_id():
     r = rq.post(ANILIST_URL, headers = head, json = data)
     global ANILIST_USER
     ANILIST_USER = r.json()['data']['Viewer']['id']
-    # return r.json()['data']['Viewer']['id']
 
 def modify_data(_data, anime_id, last):
     entry_id = 0
@@ -134,7 +133,6 @@ def auth_token_read():
 def get_id_from_file():
     with open(PATH+"info.txt", "r") as f:
         data = f.read()
-        # print(data)
         if data:
             return json.loads(data)
         return {}
@@ -145,7 +143,6 @@ def update_idfile(file_data):
 
 def get_url(data):
     payload = {"variables":f'{{"showId":"{data[0]}","translationType":"sub","episodeString":"{data[1]}"}}', "query": """query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}"""}
-    # print(payload)
     r = rq.get(URL, headers = HEADER, params=payload)
     return r.json()
 
@@ -157,7 +154,6 @@ def get_streamurl(link):
         link = nr.text.split()[2].split('/')[:-1]
         link.pop(2)
         link = '/'.join(link)
-    # print(link)
     return link
 
 def decode_link(source):
@@ -214,16 +210,23 @@ def discord_connector(thread_exitflag,lock):
     with lock:
         while not thread_exitflag.is_set():
             try:
-                # print(len(list(RPC)))
                 RPC.connect()
-                break
+                return
             except:
                 time.sleep(1)
 
 def discord_updator(thread_exitflag, lock, message):
     global RPC
+    discord_connector(thread_exitflag,lock)
     with lock:
-        RPC.update(state = message)
+        while not thread_exitflag.is_set():
+            try:
+                RPC.update(state=message) 
+                return 
+            except (pypresence.exceptions.PipeClosed, BrokenPipeError):
+                discord_connector(thread_exitflag,lock)
+
+            
 
 def main():
     connected = False
@@ -231,13 +234,12 @@ def main():
     preloaded_link = ''
     last_option = ''
     lock = threading.Lock()
+    discord_msgThr = None
     epAvailableForlast = False
     cached = False
     while True:
         thread_exitflag.clear()
         valid = []
-        discord_thread = threading.Thread(target = discord_connector, args = (thread_exitflag,lock, ), daemon=True)
-        discord_thread.start()
         data = get_anilist_user_data()
         if not epAvailableForlast:
             preloaded_link = ''
@@ -247,7 +249,7 @@ def main():
             anilist_entries = len(data['data']['MediaListCollection']['lists'][0]['entries'])
             if not anilist_entries:
                 print("No anime entry found in the anilist account. Please add some before proceeding.")
-                if discord_thread.is_alive():
+                if discord_msgThr and discord_msgThr.is_alive():
                     thread_exitflag.set()
                 return
             for i in range(0, anilist_entries):
@@ -271,7 +273,7 @@ def main():
             while query not in valid:
                 query = input(">>> ")
             if int(query) == 0:
-                if discord_thread.is_alive():
+                if discord_msgThr and discord_msgThr.is_alive():
                     thread_exitflag.set()
                 return
             last_option = query
@@ -282,7 +284,6 @@ def main():
         file_write_flag = False
         file_data = get_id_from_file()
         shows = file_data.get(str(data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId']), "")
-        # print()
         if not shows:
             shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english'])["data"]["shows"]["edges"]
             file_write_flag = True
@@ -290,7 +291,6 @@ def main():
             shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['synonyms'][0])["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
-            # print(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['synonyms'])
             print("-> No result found for the query.")
         else:
             if file_write_flag:
@@ -305,8 +305,8 @@ def main():
                 while choice not in valid:
                     choice = input(">>> ").strip()
                 if choice == "0":
-                    if discord_thread.is_alive():
-                        thread_exitflag.is_set()
+                    if discord_msgThr and discord_msgThr.is_alive():
+                        thread_exitflag.set()
                     return
                 choice = shows[int(choice)-1]
             else:
@@ -316,7 +316,6 @@ def main():
             if file_write_flag:
                 file_data[data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId']] = choice['_id']
                 update_idfile(file_data)
-            # print(choice['availableEpisodes']['sub'])
             total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']
             if not total_ep:
                 total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['episodes'])
@@ -330,27 +329,23 @@ def main():
                     print("==> Using prefetched episode link.")
                     preloaded_link = ''
                     cached = False
-                    # link = get_url([choice["_id"], last+1])
-                # print(link)
                 if not link['data']['episode']:
                     epAvailableForlast = False
                     cached = False
                     print("==> Episode released but no source available.", flush=True)
                 else:
                     final_link = get_real_link(link)
-                    # print(final_link)
                     if not final_link:
                         cached = False
                         epAvailableForlast = False
                         print("==> Episode released but no source available.", flush=True)
                     else:
                         link = ''
-                        # play_link = get_streamurl(final_link[0][0])
                         print(f'-> Playing Episode {last+1}')
                         thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',))
                         thr.start()
-                        if not discord_thread.is_alive():
-                            discord_updator(thread_exitflag, lock, f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}')
+                        discord_msgThr = threading.Thread(target = discord_updator, args = (thread_exitflag, lock, f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}'))
+                        discord_msgThr.start()
                         if last +1 < total_ep:
                             preloaded_link = get_url([choice["_id"], last+2])
                             cached = True
@@ -368,15 +363,16 @@ def main():
                         else:
                             epAvailableForlast = False
                             print('-> Skipping to update the episode.')
+                        if not discord_msgThr.is_alive():
+                            RPC.close()
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
+        if discord_msgThr:
+            if discord_msgThr.is_alive():
+                thread_exitflag.set()
 
-        if not discord_thread.is_alive():
-            RPC.close()
-        else:
-            thread_exitflag.set()
-
+mkdir()
 auth_token_read()
 try:
     main()
