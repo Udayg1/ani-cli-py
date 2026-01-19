@@ -1,7 +1,7 @@
 import requests as rq
 import json
 import mpv
-import os, sys, multiprocessing, pypresence, threading, time
+import os, urllib, multiprocessing, pypresence, threading, time
 
 PATH = os.path.expanduser("~")+"/.local/share/ani-watch/"
 ANILIST_URL="https://graphql.anilist.co"
@@ -11,7 +11,7 @@ CLIENT_ID = "28320"
 TOKEN = ""
 HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
 URL = "https://api.allanime.day/api"
-OUT = multiprocessing.Manager().dict()
+OUT = None
 RPC = pypresence.Presence(DISCORD_CLIENT)
 ENCRYPTED_SOURCES = ['Default','S-mp4']
 SOURCES = ['Mp4']
@@ -22,7 +22,6 @@ def mkdir():
     os.system(f'touch {PATH}token.txt')
 
 def search_anime(query):
-    query = "+".join(query.strip().split())
     payload = {"variables":f'{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{query}"}},"limit":40,"page":1,"translationType":"sub","countryOrigin":"ALL"}}', "query":"query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } } }"}
     r = rq.get(URL, headers = HEADER, params=payload)
     return r.json()
@@ -78,7 +77,7 @@ def modify_data(_data, anime_id, last):
         status
     }
     }""" , "variables": {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}'}}
-    
+
     head = {'Authorization': f'Bearer {TOKEN}'}
     r = rq.post(ANILIST_URL, json=data, headers = head)
     return out
@@ -88,27 +87,27 @@ def get_anilist_user_data():
         get_user_id()
     head = {'Authorization': f'Bearer {TOKEN}'}
     data = {"query": '''
-query Media($userId: Int, $type: MediaType, $status: MediaListStatus) {
-  MediaListCollection(userId: $userId, type: $type, status: $status) {
-    lists {
-      entries {
-        progress
-        mediaId
-        media {
-          episodes
-          nextAiringEpisode {
-            episode
+        query Media($userId: Int, $type: MediaType, $status: MediaListStatus) {
+          MediaListCollection(userId: $userId, type: $type, status: $status) {
+            lists {
+              entries {
+                progress
+                mediaId
+                media {
+                  episodes
+                  nextAiringEpisode {
+                    episode
+                  }
+                  title {
+                    english
+                    romaji
+                  }
+                }
+                id
+              }
+            }
           }
-          title {
-            english
-          }
-          synonyms
-        }
-        id
-      }
-    }
-  }
-}''', "variables" : {"userId": f"{ANILIST_USER}", "type":"ANIME", "status":"CURRENT"}}
+        }''', "variables" : {"userId": f"{ANILIST_USER}", "type":"ANIME", "status":"CURRENT"}}
     r = rq.post(ANILIST_URL, headers = head, json = data)
     return r.json()
 
@@ -193,16 +192,16 @@ def get_real_link(links):
     return sorted(decoded_links, key=lambda x: x[1], reverse = True)
 
 
-def mpv_player(link,title):
+def mpv_player(link,title,out):
     player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/',hwdec='vaapi', title=title)
     player.play(link)
     player.wait_until_playing()
-    global OUT
-    OUT['dur'] = player.duration
+    # global OUT
+    out['dur'] = player.duration
     @player.property_observer('time-pos')
     def get_time(_name,value):
         if value:
-            OUT['time'] = value
+            out['time'] = value
     player.wait_for_playback()
 
 def discord_connector(thread_exitflag,lock):
@@ -221,14 +220,14 @@ def discord_updator(thread_exitflag, lock, message):
     with lock:
         while not thread_exitflag.is_set():
             try:
-                RPC.update(state=message) 
-                return 
+                RPC.update(state=message)
+                return
             except (pypresence.exceptions.PipeClosed, BrokenPipeError):
                 discord_connector(thread_exitflag,lock)
 
-            
-
 def main():
+    global OUT
+    OUT = multiprocessing.Manager().dict()
     connected = False
     thread_exitflag = threading.Event()
     preloaded_link = ''
@@ -288,7 +287,7 @@ def main():
             shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english'])["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
-            shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['synonyms'][0])["data"]["shows"]["edges"]
+            shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['romaji'])["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
             print("-> No result found for the query.")
@@ -324,9 +323,8 @@ def main():
             if last < total_ep:
                 if not cached:
                     link = get_url([choice["_id"], last+1])
-                else : 
+                else :
                     link = preloaded_link
-                    print("==> Using prefetched episode link.")
                     preloaded_link = ''
                     cached = False
                 if not link['data']['episode']:
@@ -342,7 +340,7 @@ def main():
                     else:
                         link = ''
                         print(f'-> Playing Episode {last+1}')
-                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',))
+                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',OUT))
                         thr.start()
                         discord_msgThr = threading.Thread(target = discord_updator, args = (thread_exitflag, lock, f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}'))
                         discord_msgThr.start()
@@ -354,7 +352,7 @@ def main():
                         if OUT['time']/OUT['dur'] >= 0.9:
                             result = modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
                             if not result:
-                                epAvailableForlast = False
+                                epAvailableForlast = False  
                             elif last +1 < total_ep:
                                 epAvailableForlast = True
                             else:
@@ -371,10 +369,10 @@ def main():
         if discord_msgThr:
             if discord_msgThr.is_alive():
                 thread_exitflag.set()
-
-mkdir()
-auth_token_read()
-try:
-    main()
-except KeyboardInterrupt:
-    pass
+if __name__ == "__main__":
+    mkdir()
+    auth_token_read()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
