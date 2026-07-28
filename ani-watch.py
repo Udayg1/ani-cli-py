@@ -1,92 +1,193 @@
-import requests as rq
+import base64
+import hashlib
 import json
-import mpv
-import os, urllib, multiprocessing, pypresence, threading, time
+import multiprocessing
+import os
+import re
+import threading
+import time
 
-PATH = os.path.expanduser("~")+"/.local/share/ani-watch/"
-ANILIST_URL="https://graphql.anilist.co"
-ANILIST_USER = ''
-DISCORD_CLIENT = '1408296956266025022'
+import mpv
+import pypresence
+import requests
+from Crypto.Cipher import AES
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+rq = requests.session()
+rq.max_redirects = 100
+PATH = os.path.expanduser("~") + "/.local/share/ani-watch/"
+ANILIST_URL = "https://graphql.anilist.co"
+ANILIST_USER = ""
+DISCORD_CLIENT = "1408296956266025022"
+ALLANI_REFR = "https://mkissa.to"
+ALLANI_CDN = "https://cdn.mkissa.net/all/mk/_app/immutable"
 CLIENT_ID = "28320"
 TOKEN = ""
-HEADER = {"user-agent":"Mozilla/5.0 Firefox/141.0", "referer":"https://allmanga.to"}
-URL = "https://api.allanime.day/api"
+HEADER = {"User-agent": "Mozilla/5.0 Firefox/141.0", "Referer": "https://mkissa.to"}
+URL = "https://api.mkissa.net/api"
+FALLBACK_SOURCE = "https://anikuro.to/api/v1/sources/"
+FALLBACK_MAIN = "https://anikuro.to/"
 OUT = None
 RPC = pypresence.Presence(DISCORD_CLIENT)
-ENCRYPTED_SOURCES = ['Default','S-mp4']
-SOURCES = ['Mp4']
+ENCRYPTED_SOURCES = ["Default", "S-mp4", "Luf-Mp4", "Ak"]
+SOURCES = ["Mp4"]
+
 
 def mkdir():
     os.system(f"mkdir -p {PATH}")
     os.system(f"touch {PATH}info.txt")
-    os.system(f'touch {PATH}token.txt')
+    os.system(f"touch {PATH}token.txt")
+
+
+def decode_tobeparsed(blob: str) -> dict:
+    blob = base64.b64decode(blob)
+    data = get_keygen()
+    if len(blob) < 13:
+        raise ValueError("Invalid encrypted blob")
+
+    version = blob[0]
+    if version != 1:
+        raise ValueError(f"Unsupported version {version}")
+
+    iv = blob[1:13]
+
+    # ciphertext + authentication tag
+    encrypted = blob[13:]
+
+    aes = AESGCM(bytes.fromhex(data['key']))
+
+    plaintext = aes.decrypt(iv, encrypted, None)
+    out = {}
+    final = plaintext.decode("utf-8")
+    final = json.loads(final)
+    if final.get("episode") and final["episode"].get("sourceUrls"):
+        for i in final["episode"]["sourceUrls"]:
+            if i["sourceName"] in ENCRYPTED_SOURCES + SOURCES:
+                out[i["sourceName"]] = [i["sourceUrl"], i["priority"]]
+    return out
+
 
 def search_anime(query):
-    payload = {"variables":f'{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{query}"}},"limit":40,"page":1,"translationType":"sub","countryOrigin":"ALL"}}', "query":"query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } } }"}
-    r = rq.get(URL, headers = HEADER, params=payload)
+    payload = {
+        "variables": f'{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{query}"}},"limit":40,"page":1,"translationType":"sub","countryOrigin":"ALL"}}',
+        "query": "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } } }",
+    }
+    head = HEADER
+    head["Content-Type"] = "application/json"
+    r = rq.post(URL, headers=head, json=payload)
     return r.json()
 
-def get_last_ep(_data, _id):
-    for i in range(0, len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
-        if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == _id:
-            return int(_data['data']['MediaListCollection']['lists'][0]['entries'][i]['progress'])
 
-def getEpsWhenComplete(_data,anime_id):
-    for i in range(0, len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
-        if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == anime_id:
-            if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes'] is not None:
-                return int(_data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes'])
+def get_last_ep(_data, _id):
+    for i in range(0, len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
+        if (
+            _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["mediaId"]
+            == _id
+        ):
+            return int(
+                _data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                    "progress"
+                ]
+            )
+
+
+def getEpsWhenComplete(_data, anime_id):
+    for i in range(0, len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
+        if (
+            _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["mediaId"]
+            == anime_id
+        ):
+            if (
+                _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["media"][
+                    "episodes"
+                ]
+                is not None
+            ):
+                return int(
+                    _data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                        "media"
+                    ]["episodes"]
+                )
             return None
+
+
 def get_user_id():
-    head = {'Authorization': f'Bearer {TOKEN}'}
-    data = {"query" : '''query {
+    head = {"Authorization": f"Bearer {TOKEN}"}
+    data = {
+        "query": """query {
   Viewer {
     id
   }
-}'''}
-    r = rq.post(ANILIST_URL, headers = head, json = data)
+}"""
+    }
+    r = rq.post(ANILIST_URL, headers=head, json=data)
     global ANILIST_USER
-    ANILIST_USER = r.json()['data']['Viewer']['id']
+    ANILIST_USER = r.json()["data"]["Viewer"]["id"]
+
 
 def modify_data(_data, anime_id, last):
     entry_id = 0
-    for i in range(len(_data['data']['MediaListCollection']['lists'][0]['entries'])):
-        if _data['data']['MediaListCollection']['lists'][0]['entries'][i]['mediaId'] == anime_id:
-            entry_id = _data['data']['MediaListCollection']['lists'][0]['entries'][i]['id']
+    for i in range(len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
+        if (
+            _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["mediaId"]
+            == anime_id
+        ):
+            entry_id = _data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                "id"
+            ]
     print(f"-> Updating progess to {last}\n")
-    status = 'CURRENT'
+    status = "CURRENT"
     out = 1
-    total = getEpsWhenComplete(_data,anime_id)
+    total = getEpsWhenComplete(_data, anime_id)
     if total is not None and last >= total:
         last = total
-        status = 'COMPLETED'
+        status = "COMPLETED"
         out = 0
         score = input("Anime completed. Enter score: ")
         while not score.isdigit() and not 0 <= float(score) <= 10:
             score = input("Enter a valid digit: ")
-        data = {"query": """mutation SaveMediaListEntry($saveMediaListEntryId: Int, $progress: Int, $mediaId: Int, $status: MediaListStatus, $score: Float) {
+        data = {
+            "query": """mutation SaveMediaListEntry($saveMediaListEntryId: Int, $progress: Int, $mediaId: Int, $status: MediaListStatus, $score: Float) {
   SaveMediaListEntry(id: $saveMediaListEntryId, progress: $progress, mediaId: $mediaId, status: $status, score: $score) {
     id
     status
         }
-}""", "variables":  {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}', "score": f"{float(score)}"}}
+}""",
+            "variables": {
+                "listEntryId": f"{entry_id}",
+                "mediaId": f"{anime_id}",
+                "status": f"{status}",
+                "progress": f"{last}",
+                "score": f"{float(score)}",
+            },
+        }
     else:
-        data = {"query" : """mutation ($listEntryId: Int, $mediaId: Int, $status: MediaListStatus, $progress: Int) {
+        data = {
+            "query": """mutation ($listEntryId: Int, $mediaId: Int, $status: MediaListStatus, $progress: Int) {
     SaveMediaListEntry(id: $listEntryId, mediaId: $mediaId, status: $status, progress: $progress) {
         id
         status
     }
-    }""" , "variables": {"listEntryId" : f"{entry_id}", 'mediaId':f'{anime_id}', 'status' : f"{status}", 'progress': f'{last}'}}
+    }""",
+            "variables": {
+                "listEntryId": f"{entry_id}",
+                "mediaId": f"{anime_id}",
+                "status": f"{status}",
+                "progress": f"{last}",
+            },
+        }
 
-    head = {'Authorization': f'Bearer {TOKEN}'}
-    r = rq.post(ANILIST_URL, json=data, headers = head)
+    head = {"Authorization": f"Bearer {TOKEN}"}
+    r = rq.post(ANILIST_URL, json=data, headers=head)
     return out
+
 
 def get_anilist_user_data():
     if not ANILIST_USER:
         get_user_id()
-    head = {'Authorization': f'Bearer {TOKEN}'}
-    data = {"query": '''
+    head = {"Authorization": f"Bearer {TOKEN}"}
+    data = {
+        "query": """
         query Media($userId: Int, $type: MediaType, $status: MediaListStatus) {
           MediaListCollection(userId: $userId, type: $type, status: $status) {
             lists {
@@ -107,8 +208,14 @@ def get_anilist_user_data():
               }
             }
           }
-        }''', "variables" : {"userId": f"{ANILIST_USER}", "type":"ANIME", "status":"CURRENT"}}
-    r = rq.post(ANILIST_URL, headers = head, json = data)
+        }""",
+        "variables": {
+            "userId": f"{ANILIST_USER}",
+            "type": "ANIME",
+            "status": "CURRENT",
+        },
+    }
+    r = rq.post(ANILIST_URL, headers=head, json=data)
     return r.json()
 
 
@@ -119,92 +226,281 @@ def auth_token_write():
     print("Auth token here -> ")
     global TOKEN
     TOKEN = input().strip()
-    with open(PATH+'token.txt', 'a') as f:
+    with open(PATH + "token.txt", "a") as f:
         f.write(TOKEN)
 
+
 def auth_token_read():
-    with open(PATH+"token.txt", 'r') as f:
+    with open(PATH + "token.txt", "r") as f:
         global TOKEN
-        TOKEN= f.read().strip()
+        TOKEN = f.read().strip()
         if not TOKEN:
             auth_token_write()
 
+
 def get_id_from_file():
-    with open(PATH+"info.txt", "r") as f:
+    with open(PATH + "info.txt", "r") as f:
         data = f.read()
         if data:
             return json.loads(data)
         return {}
 
+
 def update_idfile(file_data):
-    with open(PATH+'info.txt', "w") as f:
+    with open(PATH + "info.txt", "w") as f:
         f.write(json.dumps(file_data))
 
+
+def build_auth_token(
+    query_hash: str,
+    key_hex: str,
+    epoch: int,
+) -> str:
+    """
+    Builds the encrypted token.
+    """
+
+    ts = (int(time.time()) // 300) * 300 * 1000
+
+    payload = (f'{{"v":1,"ts":{ts},"epoch":{epoch},"qh":"{query_hash}"}}').encode()
+
+    payload_iv = f"{epoch}:{query_hash}:{ts}"
+
+    iv = hashlib.sha256(payload_iv.encode()).digest()[:12]
+
+    aes = AESGCM(bytes.fromhex(key_hex))
+
+    encrypted = aes.encrypt(iv, payload, None)
+
+    # cryptography returns ciphertext || tag
+    token = b"\x01" + iv + encrypted
+
+    return base64.b64encode(token).decode()
+
+
+def get_keygen() -> dict:
+    r = rq.get(
+        "https://raw.githubusercontent.com/sdaqo/anipy-cli/refs/heads/key-gen/scripts/keygen/keygen.json"
+    )
+    if r.status_code >= 300:
+        raise Exception("keygen failed")
+    return json.loads(r.text)
+
+
 def get_url(data):
-    payload = {"variables":f'{{"showId":"{data[0]}","translationType":"sub","episodeString":"{data[1]}"}}', "query": """query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) { episode( showId: $showId translationType: $translationType episodeString: $episodeString ) { episodeString sourceUrls }}"""}
-    r = rq.get(URL, headers = HEADER, params=payload)
+    from urllib.parse import quote
+
+    keygen_data = {}
+    while 1:
+        try:
+            keygen_data = get_keygen()
+            break
+        except:
+            pass
+    query_ext = {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": keygen_data.get("query_hash", None),
+        },
+        "aaReq": build_auth_token(
+            keygen_data.get("query_hash", None),
+            keygen_data.get("key", None),
+            keygen_data.get("epoch", None),
+        ),
+    }
+    payload = {
+        "showId": f"{data[0]}",
+        "translationType": "sub",
+        "episodeString": f"{data[1]}",
+    }
+
+    head = {
+        "User-Agent": HEADER["User-agent"],
+        "Origin": ALLANI_REFR,
+        "Referer": ALLANI_REFR,
+    }
+    encoded_vars = quote(json.dumps(payload, separators=(",", ":")))
+    encoded_ext = quote(json.dumps(query_ext, separators=(",", ":")))
+
+    api_url = f"{URL}?variables={encoded_vars}&extensions={encoded_ext}"
+    r = rq.get(api_url, headers=head)
+    # api_resp = r.text
     return r.json()
 
+
 def get_streamurl(link):
-    r = rq.get(f"https://allanime.day{link}", headers = HEADER)
-    link = dict(r.json().get('links', None)[0]).get('link', None)
-    if link is not None and link.endswith("master.m3u8"):
-        nr = rq.get(link, headers = HEADER)
-        link = nr.text.split()[2].split('/')[:-1]
-        link.pop(2)
-        link = '/'.join(link)
+    try:
+        r = rq.get(f"https://allanime.day{link}", headers=HEADER, timeout=5)
+        link = dict(r.json().get("links", None)[0]).get("link", None)
+        if link is not None and link.endswith("master.m3u8"):
+            nr = rq.get(link, headers=HEADER)
+            link = nr.text.split()[2].split("/")[:-1]
+            link.pop(2)
+            link = "/".join(link)
+
+    except:
+        return ""
     return link
+
 
 def decode_link(source):
     hex_map = {
-        '79': 'A', '7a': 'B', '7b': 'C', '7c': 'D', '7d': 'E', '7e': 'F', '7f': 'G',
-        '70': 'H', '71': 'I', '72': 'J', '73': 'K', '74': 'L', '75': 'M', '76': 'N', '77': 'O',
-        '68': 'P', '69': 'Q', '6a': 'R', '6b': 'S', '6c': 'T', '6d': 'U', '6e': 'V', '6f': 'W',
-        '60': 'X', '61': 'Y', '62': 'Z',
-        '59': 'a', '5a': 'b', '5b': 'c', '5c': 'd', '5d': 'e', '5e': 'f', '5f': 'g',
-        '50': 'h', '51': 'i', '52': 'j', '53': 'k', '54': 'l', '55': 'm', '56': 'n', '57': 'o',
-        '48': 'p', '49': 'q', '4a': 'r', '4b': 's', '4c': 't', '4d': 'u', '4e': 'v', '4f': 'w',
-        '40': 'x', '41': 'y', '42': 'z',
-        '08': '0', '09': '1', '0a': '2', '0b': '3', '0c': '4', '0d': '5', '0e': '6', '0f': '7',
-        '00': '8', '01': '9',
-        '15': '-', '16': '.', '67': '_', '46': '~', '02': ':', '17': '/', '07': '?', '1b': '#',
-        '63': '[', '65': ']', '78': '@', '19': '!', '1c': '$', '1e': '&', '10': '(', '11': ')',
-        '12': '*', '13': '+', '14': ',', '03': ';', '05': '=', '1d': '%',
+        "79": "A",
+        "7a": "B",
+        "7b": "C",
+        "7c": "D",
+        "7d": "E",
+        "7e": "F",
+        "7f": "G",
+        "70": "H",
+        "71": "I",
+        "72": "J",
+        "73": "K",
+        "74": "L",
+        "75": "M",
+        "76": "N",
+        "77": "O",
+        "68": "P",
+        "69": "Q",
+        "6a": "R",
+        "6b": "S",
+        "6c": "T",
+        "6d": "U",
+        "6e": "V",
+        "6f": "W",
+        "60": "X",
+        "61": "Y",
+        "62": "Z",
+        "59": "a",
+        "5a": "b",
+        "5b": "c",
+        "5c": "d",
+        "5d": "e",
+        "5e": "f",
+        "5f": "g",
+        "50": "h",
+        "51": "i",
+        "52": "j",
+        "53": "k",
+        "54": "l",
+        "55": "m",
+        "56": "n",
+        "57": "o",
+        "48": "p",
+        "49": "q",
+        "4a": "r",
+        "4b": "s",
+        "4c": "t",
+        "4d": "u",
+        "4e": "v",
+        "4f": "w",
+        "40": "x",
+        "41": "y",
+        "42": "z",
+        "08": "0",
+        "09": "1",
+        "0a": "2",
+        "0b": "3",
+        "0c": "4",
+        "0d": "5",
+        "0e": "6",
+        "0f": "7",
+        "00": "8",
+        "01": "9",
+        "15": "-",
+        "16": ".",
+        "67": "_",
+        "46": "~",
+        "02": ":",
+        "17": "/",
+        "07": "?",
+        "1b": "#",
+        "63": "[",
+        "65": "]",
+        "78": "@",
+        "19": "!",
+        "1c": "$",
+        "1e": "&",
+        "10": "(",
+        "11": ")",
+        "12": "*",
+        "13": "+",
+        "14": ",",
+        "03": ";",
+        "05": "=",
+        "1d": "%",
     }
-    source = source[2:]
     decoded = []
-    for i in range(0,len(source), 2):
-        decoded.append(hex_map.get(source[i:i+2] , ''))
-    return "clock.json".join("".join(decoded).strip().split('clock'))
+    for i in range(0, len(source), 2):
+        decoded.append(hex_map.get(source[i : i + 2], ""))
+    return "clock.json".join("".join(decoded).strip().split("clock"))
+
 
 def get_real_link(links):
     decoded_links = []
-    for i in range(len(links['data']['episode']['sourceUrls'])):
+    for i in links:
         real_final_link = []
-        if links['data']['episode']['sourceUrls'][i]['sourceName'] == 'Yt-mp4':
-            real_final_link = [decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl']),9]
-        elif links['data']['episode']['sourceUrls'][i]['sourceName'] in ENCRYPTED_SOURCES:
-            real_final_link = [get_streamurl(decode_link(links['data']['episode']['sourceUrls'][i]['sourceUrl'])), links['data']['episode']['sourceUrls'][i]['priority']]
-        elif links['data']['episode']['sourceUrls'][i]['sourceName'] in SOURCES:
-            real_final_link = [links['data']['episode']['sourceUrls'][i]['sourceUrl'],links['data']['episode']['sourceUrls'][i]['priority']]
-        if len(real_final_link) == 2 and real_final_link[0] is not None:
+        if i == "Yt-mp4":
+            real_final_link = [
+                links[i][0],
+                9,
+            ]
             decoded_links.append(real_final_link)
-    return sorted(decoded_links, key=lambda x: x[1], reverse = True)
+            continue
+        elif i in ENCRYPTED_SOURCES:
+            decoded = decode_link(links[i][0][2:])
+            dlink = get_streamurl(decoded)
+            if dlink:
+                real_final_link = [
+                    dlink,
+                    float(links[i][1]),
+                ]
+        elif i in SOURCES:
+            real_final_link = [
+                links[i][0],
+                float(links[i][1]),
+            ]
+        if len(real_final_link) == 2 and real_final_link[0] is not None:
+            r = rq.get(real_final_link[0], headers=HEADER, stream=True)
+            if r.status_code < 300:
+                decoded_links.append(real_final_link)
+    return sorted(decoded_links, key=lambda x: x[1], reverse=True)
 
 
-def mpv_player(link,title,out):
-    player = mpv.MPV(ytdl=True,input_default_bindings=True, input_vo_keyboard=True,osc=True,http_header_fields='Referer: https://allmanga.to/',hwdec='vaapi', title=title)
-    player.play(link)
+def mpv_player(link, title, out):
+    header_args = []
+    formatted_headers = ""
+    if link["url"].find("mp4upload") == -1:
+        header_args = [f"{k.lower()}: {v}" for k, v in link["headers"].items()]
+        formatted_headers = ",".join([f"'{h}'" for h in header_args])
+    player = mpv.MPV(
+        ytdl=True,
+        input_default_bindings=True,
+        input_vo_keyboard=True,
+        osc=True,
+        http_header_fields=formatted_headers,
+        referrer=link.get("headers", {}).get("Referer", ""),
+        hwdec="vaapi",
+        title=title,
+        demuxer_lavf_o="protocol-whitelist=[hls,tcp,tls,file,crypto,http,https]",
+        cache="yes",
+        demuxer_max_bytes=500000000,
+        demuxer_max_back_bytes=100000000,
+    )
+    player.play(link.get("url", ""))
     player.wait_until_playing()
     # global OUT
-    out['dur'] = player.duration
-    @player.property_observer('time-pos')
-    def get_time(_name,value):
+    out["dur"] = player.duration
+
+    @player.property_observer("time-pos")
+    def get_time(_name, value):
         if value:
-            out['time'] = value
+            out["time"] = value
+
     player.wait_for_playback()
 
-def discord_connector(thread_exitflag,lock):
+
+def discord_connector(thread_exitflag, lock):
     global RPC
     with lock:
         while not thread_exitflag.is_set():
@@ -214,57 +510,117 @@ def discord_connector(thread_exitflag,lock):
             except:
                 time.sleep(1)
 
+
 def discord_updator(thread_exitflag, lock, message):
     global RPC
-    discord_connector(thread_exitflag,lock)
+    discord_connector(thread_exitflag, lock)
     with lock:
         while not thread_exitflag.is_set():
             try:
                 RPC.update(state=message)
                 return
             except (pypresence.exceptions.PipeClosed, BrokenPipeError):
-                discord_connector(thread_exitflag,lock)
+                discord_connector(thread_exitflag, lock)
+
+
+def fallback_api(
+    series_id,
+    ep_num,
+):
+    lists = ["allanime", "animepahe", "anikoto"]
+    for i in lists:
+        r = rq.get(FALLBACK_SOURCE + f"{i}/{series_id}:{ep_num}")
+        if r.status_code != 200:
+            continue
+        jsn = r.json()
+        try:
+            if (
+                rq.get(
+                    jsn["data"]["raw"]["sub"]["originalUrl"],
+                    headers=jsn["data"]["raw"]["sub"]["headers"],
+                ).status_code
+                != 200
+            ):
+                continue
+            return {
+                "url": jsn["data"]["raw"]["sub"]["originalUrl"],
+                "headers": jsn["data"]["raw"]["sub"]["headers"],
+            }
+        except:
+            continue
+
 
 def main():
     global OUT
     OUT = multiprocessing.Manager().dict()
     connected = False
     thread_exitflag = threading.Event()
-    preloaded_link = ''
-    last_option = ''
+    preloaded_link = ""
+    last_option = ""
     lock = threading.Lock()
     discord_msgThr = None
     epAvailableForlast = False
     cached = False
+    thr = None
     while True:
         thread_exitflag.clear()
         valid = []
         data = get_anilist_user_data()
         if not epAvailableForlast:
-            preloaded_link = ''
+            preloaded_link = ""
             cached = False
             print()
             ep_behind = 0
-            anilist_entries = len(data['data']['MediaListCollection']['lists'][0]['entries'])
+            anilist_entries = len(
+                data["data"]["MediaListCollection"]["lists"][0]["entries"]
+            )
             if not anilist_entries:
-                print("No anime entry found in the anilist account. Please add some before proceeding.")
+                print(
+                    "No anime entry found in the anilist account. Please add some before proceeding."
+                )
                 if discord_msgThr and discord_msgThr.is_alive():
                     thread_exitflag.set()
                 return
             for i in range(0, anilist_entries):
-                prog = data['data']['MediaListCollection']['lists'][0]['entries'][i]['progress']
-                if not data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['nextAiringEpisode']:
-                    total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['episodes']
+                prog = data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                    "progress"
+                ]
+                if not data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                    "media"
+                ]["nextAiringEpisode"]:
+                    total_ep = data["data"]["MediaListCollection"]["lists"][0][
+                        "entries"
+                    ][i]["media"]["episodes"]
                 else:
-                    total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['nextAiringEpisode']['episode']) - 1
+                    total_ep = (
+                        int(
+                            data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                                i
+                            ]["media"]["nextAiringEpisode"]["episode"]
+                        )
+                        - 1
+                    )
                 ep_behind = int(total_ep) - int(prog)
                 if ep_behind:
                     if ep_behind > 1:
-                        print(str(i+1)+'.', f'\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}', f'**({ep_behind} episodes behind)\033[0m')
+                        print(
+                            str(i + 1) + ".",
+                            f"\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}",
+                            f"**({ep_behind} episodes behind)\033[0m",
+                        )
                     else:
-                        print(str(i+1)+'.', f"\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}", f'**({ep_behind} episode behind)\033[0m')
+                        print(
+                            str(i + 1) + ".",
+                            f"\033[32m{data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english']}",
+                            f"**({ep_behind} episode behind)\033[0m",
+                        )
                 else:
-                    print(str(i+1)+'.', data['data']['MediaListCollection']['lists'][0]['entries'][i]['media']['title']['english'])
+                    print(
+                        str(i + 1) + ".",
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
+                            "media"
+                        ]["title"]["english"],
+                    )
                 valid.append(str(i))
             valid.append(str(anilist_entries))
             print("\nEnter anime number (0 - exit): ")
@@ -276,99 +632,234 @@ def main():
                     thread_exitflag.set()
                 return
             last_option = query
-            query = int(query) -1
+            query = int(query) - 1
             print()
         else:
             query = int(last_option) - 1
         file_write_flag = False
         file_data = get_id_from_file()
-        shows = file_data.get(str(data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId']), "")
+        shows = file_data.get(
+            str(
+                data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                    "mediaId"
+                ]
+            ),
+            "",
+        )
         if not shows:
-            shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english'])["data"]["shows"]["edges"]
+            shows = search_anime(
+                data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                    "media"
+                ]["title"]["english"]
+            )["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
-            shows = search_anime(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['romaji'])["data"]["shows"]["edges"]
+            shows = search_anime(
+                data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                    "media"
+                ]["title"]["romaji"]
+            )["data"]["shows"]["edges"]
             file_write_flag = True
         if not shows:
             print("-> No result found for the query.")
         else:
             if file_write_flag:
                 for i in range(len(shows)):
-                    print(str(i+1)+".", shows[i]["name"], "(Episodes:", str(shows[i]['availableEpisodes']["sub"])+')')
+                    print(
+                        str(i + 1) + ".",
+                        shows[i]["name"],
+                        "(Episodes:",
+                        str(shows[i]["availableEpisodes"]["sub"]) + ")",
+                    )
                 if len(shows) == 1:
                     print("Enter 1 to play, 0 - exit")
                 else:
                     print(f"Enter (1-{len(shows)}, 0 - exit)")
-                valid = [str(x) for x in range(0,len(shows)+1)]
+                valid = [str(x) for x in range(0, len(shows) + 1)]
                 choice = input(">>> ").strip()
                 while choice not in valid:
                     choice = input(">>> ").strip()
                 if choice == "0":
                     if discord_msgThr and discord_msgThr.is_alive():
+                        thr.join()
                         thread_exitflag.set()
                     return
-                choice = shows[int(choice)-1]
+                choice = shows[int(choice) - 1]
             else:
                 choice = {}
-                choice['_id'] = shows
-            last = get_last_ep(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'])
+                choice["_id"] = shows
+            last = get_last_ep(
+                data,
+                data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                    "mediaId"
+                ],
+            )
             if file_write_flag:
-                file_data[data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId']] = choice['_id']
+                file_data[
+                    data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                        "mediaId"
+                    ]
+                ] = choice["_id"]
                 update_idfile(file_data)
-            total_ep = data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']
+            total_ep = data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                query
+            ]["media"]["nextAiringEpisode"]
             if not total_ep:
-                total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['episodes'])
+                total_ep = int(
+                    data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                        "media"
+                    ]["episodes"]
+                )
             else:
-                total_ep = int(data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['nextAiringEpisode']['episode'])-1
+                total_ep = (
+                    int(
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["media"]["nextAiringEpisode"]["episode"]
+                    )
+                    - 1
+                )
             if last < total_ep:
                 if not cached:
-                    link = get_url([choice["_id"], last+1])
-                else :
-                    link = preloaded_link
-                    preloaded_link = ''
-                    cached = False
-                if not link['data']['episode']:
-                    epAvailableForlast = False
-                    cached = False
-                    print("==> Episode released but no source available.", flush=True)
+                    # link = fallback_api(data['data']["MediaListCollection"]["lists"][0]["entries"][query]["mediaId"], last + 1)
+                    link = get_url([choice["_id"], last + 1])
                 else:
-                    final_link = get_real_link(link)
-                    if not final_link:
-                        cached = False
-                        epAvailableForlast = False
-                        print("==> Episode released but no source available.", flush=True)
-                    else:
-                        link = ''
-                        print(f'-> Playing Episode {last+1}')
-                        thr = multiprocessing.Process(target = mpv_player, args = (final_link[0][0], f'{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last+1}',OUT))
-                        thr.start()
-                        discord_msgThr = threading.Thread(target = discord_updator, args = (thread_exitflag, lock, f'Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last+1}'))
-                        discord_msgThr.start()
-                        if last +1 < total_ep:
-                            preloaded_link = get_url([choice["_id"], last+2])
+                    link = preloaded_link
+                    preloaded_link = ""
+                    cached = False
+                finLink = None
+                if link and type(link) == dict:
+                    try:
+                        if link.get("data", None) and link["data"].get(
+                            "tobeparsed", None
+                        ):
+                            fin = decode_tobeparsed(link["data"]["tobeparsed"])
+                            print("parsed")
+                            finLink = get_real_link(fin)
+                            print("links fetched")
+                    except KeyboardInterrupt:
+                        pass
+                print(link, finLink)
+                if finLink:
+                    print(f"-> Playing episode {last + 1}")
+                    thr = multiprocessing.Process(
+                        target=mpv_player,
+                        args=(
+                            {
+                                "url": finLink[0][0],
+                                "headers": {
+                                    "Referer": ALLANI_REFR
+                                    if finLink[0][0].find("mp4upload") == -1
+                                    else ""
+                                },
+                            },
+                            f"{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last + 1}",
+                            OUT,
+                        ),
+                    )
+                    thr.start()
+                    discord_msgThr = threading.Thread(
+                        target=discord_updator,
+                        args=(
+                            thread_exitflag,
+                            lock,
+                            f"Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last + 1}",
+                        ),
+                    )
+                    discord_msgThr.start()
+                    if last + 1 < total_ep:
+                        preloaded_link = get_url([choice["_id"], last + 2])
+                        if preloaded_link:
                             cached = True
+                        else:
+                            preloaded_link = fallback_api(
+                                data["data"]["MediaListCollection"]["lists"][0][
+                                    "entries"
+                                ][query]["mediaId"],
+                                last + 2,
+                            )
+                            if preloaded_link:
+                                cached = True
+                    thr.join()
+                    thr.terminate()
+                else:
+                    print("===> Trying fallback sources")
+                    link = fallback_api(
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["mediaId"],
+                        last + 1,
+                    )
+                    if link:
+                        print(f"-> Playing episode {last + 1}")
+                        thr = multiprocessing.Process(
+                            target=mpv_player,
+                            args=(
+                                link,
+                                f"{data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} - Episode {last + 1}",
+                                OUT,
+                            ),
+                        )
+                        thr.start()
+                        discord_msgThr = threading.Thread(
+                            target=discord_updator,
+                            args=(
+                                thread_exitflag,
+                                lock,
+                                f"Watching {data['data']['MediaListCollection']['lists'][0]['entries'][query]['media']['title']['english']} -- Episode {last + 1}",
+                            ),
+                        )
+                        discord_msgThr.start()
+                        if last + 1 < total_ep:
+                            preloaded_link = get_url([choice["_id"], last + 2])
+                            if preloaded_link:
+                                cached = True
+                            else:
+                                preloaded_link = fallback_api(
+                                    data["data"]["MediaListCollection"]["lists"][0][
+                                        "entries"
+                                    ][query]["mediaId"],
+                                    last + 2,
+                                )
+                                if preloaded_link:
+                                    cached = True
                         thr.join()
                         thr.terminate()
-                        if OUT['time']/OUT['dur'] >= 0.9:
-                            result = modify_data(data,data['data']['MediaListCollection']['lists'][0]['entries'][query]['mediaId'],last +1)
-                            if not result:
-                                epAvailableForlast = False  
-                            elif last +1 < total_ep:
-                                epAvailableForlast = True
-                            else:
-                                epAvailableForlast = False
-                                print("-> No new episodes available.")
-                        else:
-                            epAvailableForlast = False
-                            print('-> Skipping to update the episode.')
-                        if not discord_msgThr.is_alive():
-                            RPC.close()
+                    else:
+                        print("==> Episode released but no sources available....")
+                        continue
+                if (
+                    OUT.get("time", 0)
+                    / OUT.get("dur", 10000000000000000000000000000000000000000)
+                    >= 0.9
+                ):
+                    result = modify_data(
+                        data,
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["mediaId"],
+                        last + 1,
+                    )
+                    if not result:
+                        epAvailableForlast = False
+                    elif last + 1 < total_ep:
+                        epAvailableForlast = True
+                    else:
+                        epAvailableForlast = False
+                        print("-> No new episodes available.")
+                else:
+                    epAvailableForlast = False
+                    print("-> Skipping to update the episode.")
+                if not discord_msgThr.is_alive():
+                    RPC.close()
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
         if discord_msgThr:
             if discord_msgThr.is_alive():
                 thread_exitflag.set()
+
+
 if __name__ == "__main__":
     mkdir()
     auth_token_read()
