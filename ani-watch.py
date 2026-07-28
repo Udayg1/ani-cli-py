@@ -4,12 +4,16 @@ import json
 import multiprocessing
 import os
 import re
+import tempfile
 import threading
 import time
+from random import choice, random
+from urllib.parse import urljoin
 
 import mpv
 import pypresence
 import requests
+from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -19,18 +23,15 @@ PATH = os.path.expanduser("~") + "/.local/share/ani-watch/"
 ANILIST_URL = "https://graphql.anilist.co"
 ANILIST_USER = ""
 DISCORD_CLIENT = "1408296956266025022"
-ALLANI_REFR = "https://mkissa.to"
-ALLANI_CDN = "https://cdn.mkissa.net/all/mk/_app/immutable"
+REFR = "https://aniwaves.ru/"
 CLIENT_ID = "28320"
 TOKEN = ""
-HEADER = {"User-agent": "Mozilla/5.0 Firefox/141.0", "Referer": "https://mkissa.to"}
-URL = "https://api.mkissa.net/api"
+HEADER = {"User-agent": "Mozilla/5.0 Firefox/153.0", "Referer": REFR}
+URL = "https://aniwaves.ru/"
 FALLBACK_SOURCE = "https://anikuro.to/api/v1/sources/"
 FALLBACK_MAIN = "https://anikuro.to/"
 OUT = None
 RPC = pypresence.Presence(DISCORD_CLIENT)
-ENCRYPTED_SOURCES = ["Default", "S-mp4", "Luf-Mp4", "Ak"]
-SOURCES = ["Mp4"]
 
 
 def mkdir():
@@ -39,43 +40,22 @@ def mkdir():
     os.system(f"touch {PATH}token.txt")
 
 
-def decode_tobeparsed(blob: str) -> dict:
-    blob = base64.b64decode(blob)
-    data = get_keygen()
-    if len(blob) < 13:
-        raise ValueError("Invalid encrypted blob")
-
-    version = blob[0]
-    if version != 1:
-        raise ValueError(f"Unsupported version {version}")
-
-    iv = blob[1:13]
-
-    # ciphertext + authentication tag
-    encrypted = blob[13:]
-
-    aes = AESGCM(bytes.fromhex(data['key']))
-
-    plaintext = aes.decrypt(iv, encrypted, None)
-    out = {}
-    final = plaintext.decode("utf-8")
-    final = json.loads(final)
-    if final.get("episode") and final["episode"].get("sourceUrls"):
-        for i in final["episode"]["sourceUrls"]:
-            if i["sourceName"] in ENCRYPTED_SOURCES + SOURCES:
-                out[i["sourceName"]] = [i["sourceUrl"], i["priority"]]
-    return out
-
-
 def search_anime(query):
-    payload = {
-        "variables": f'{{"search":{{"allowAdult":false,"allowUnknown":false,"query":"{query}"}},"limit":40,"page":1,"translationType":"sub","countryOrigin":"ALL"}}',
-        "query": "query( $search: SearchInput $limit: Int $page: Int $translationType: VaildTranslationTypeEnumType $countryOrigin: VaildCountryOriginEnumType ) { shows( search: $search limit: $limit page: $page translationType: $translationType countryOrigin: $countryOrigin ) { edges { _id name availableEpisodes __typename } } }",
-    }
-    head = HEADER
-    head["Content-Type"] = "application/json"
-    r = rq.post(URL, headers=head, json=payload)
-    return r.json()
+    r = rq.get(
+        URL + "ajax/anime/search?keyword=" + "+".join(query.split()), headers=HEADER
+    )
+
+    data = r.json()
+
+    html = data["result"]["html"]
+
+    soup = BeautifulSoup(html, "html.parser")
+    results = []
+    for item in soup.select("a.item"):
+        title = item.select_one(".d-title").text.strip()
+        url = item["href"].split("/")[-1]
+        results.append({"title": title, "id": url})
+    return results
 
 
 def get_last_ep(_data, _id):
@@ -251,228 +231,99 @@ def update_idfile(file_data):
         f.write(json.dumps(file_data))
 
 
-def build_auth_token(
-    query_hash: str,
-    key_hex: str,
-    epoch: int,
-) -> str:
-    """
-    Builds the encrypted token.
-    """
-
-    ts = (int(time.time()) // 300) * 300 * 1000
-
-    payload = (f'{{"v":1,"ts":{ts},"epoch":{epoch},"qh":"{query_hash}"}}').encode()
-
-    payload_iv = f"{epoch}:{query_hash}:{ts}"
-
-    iv = hashlib.sha256(payload_iv.encode()).digest()[:12]
-
-    aes = AESGCM(bytes.fromhex(key_hex))
-
-    encrypted = aes.encrypt(iv, payload, None)
-
-    # cryptography returns ciphertext || tag
-    token = b"\x01" + iv + encrypted
-
-    return base64.b64encode(token).decode()
-
-
-def get_keygen() -> dict:
-    r = rq.get(
-        "https://raw.githubusercontent.com/sdaqo/anipy-cli/refs/heads/key-gen/scripts/keygen/keygen.json"
-    )
-    if r.status_code >= 300:
-        raise Exception("keygen failed")
-    return json.loads(r.text)
-
-
 def get_url(data):
-    from urllib.parse import quote
+    """
+    index 0 has ep id and index 1 has episode number. returns response json
+    """
+    id = data[0]
+    episode = data[1]
+    numeric_id = id.split("-")[-1]
+    api_url = URL + "ajax/server/list?servers=" + numeric_id + "&eps=" + str(episode)
+    r = rq.get(api_url, headers=HEADER)
+    first_json = r.json()
 
-    keygen_data = {}
-    while 1:
-        try:
-            keygen_data = get_keygen()
-            break
-        except:
-            pass
-    query_ext = {
-        "persistedQuery": {
-            "version": 1,
-            "sha256Hash": keygen_data.get("query_hash", None),
-        },
-        "aaReq": build_auth_token(
-            keygen_data.get("query_hash", None),
-            keygen_data.get("key", None),
-            keygen_data.get("epoch", None),
-        ),
-    }
-    payload = {
-        "showId": f"{data[0]}",
-        "translationType": "sub",
-        "episodeString": f"{data[1]}",
-    }
-
-    head = {
-        "User-Agent": HEADER["User-agent"],
-        "Origin": ALLANI_REFR,
-        "Referer": ALLANI_REFR,
-    }
-    encoded_vars = quote(json.dumps(payload, separators=(",", ":")))
-    encoded_ext = quote(json.dumps(query_ext, separators=(",", ":")))
-
-    api_url = f"{URL}?variables={encoded_vars}&extensions={encoded_ext}"
-    r = rq.get(api_url, headers=head)
-    # api_resp = r.text
-    return r.json()
-
-
-def get_streamurl(link):
-    try:
-        r = rq.get(f"https://allanime.day{link}", headers=HEADER, timeout=5)
-        link = dict(r.json().get("links", None)[0]).get("link", None)
-        if link is not None and link.endswith("master.m3u8"):
-            nr = rq.get(link, headers=HEADER)
-            link = nr.text.split()[2].split("/")[:-1]
-            link.pop(2)
-            link = "/".join(link)
-
-    except:
-        return ""
-    return link
-
-
-def decode_link(source):
-    hex_map = {
-        "79": "A",
-        "7a": "B",
-        "7b": "C",
-        "7c": "D",
-        "7d": "E",
-        "7e": "F",
-        "7f": "G",
-        "70": "H",
-        "71": "I",
-        "72": "J",
-        "73": "K",
-        "74": "L",
-        "75": "M",
-        "76": "N",
-        "77": "O",
-        "68": "P",
-        "69": "Q",
-        "6a": "R",
-        "6b": "S",
-        "6c": "T",
-        "6d": "U",
-        "6e": "V",
-        "6f": "W",
-        "60": "X",
-        "61": "Y",
-        "62": "Z",
-        "59": "a",
-        "5a": "b",
-        "5b": "c",
-        "5c": "d",
-        "5d": "e",
-        "5e": "f",
-        "5f": "g",
-        "50": "h",
-        "51": "i",
-        "52": "j",
-        "53": "k",
-        "54": "l",
-        "55": "m",
-        "56": "n",
-        "57": "o",
-        "48": "p",
-        "49": "q",
-        "4a": "r",
-        "4b": "s",
-        "4c": "t",
-        "4d": "u",
-        "4e": "v",
-        "4f": "w",
-        "40": "x",
-        "41": "y",
-        "42": "z",
-        "08": "0",
-        "09": "1",
-        "0a": "2",
-        "0b": "3",
-        "0c": "4",
-        "0d": "5",
-        "0e": "6",
-        "0f": "7",
-        "00": "8",
-        "01": "9",
-        "15": "-",
-        "16": ".",
-        "67": "_",
-        "46": "~",
-        "02": ":",
-        "17": "/",
-        "07": "?",
-        "1b": "#",
-        "63": "[",
-        "65": "]",
-        "78": "@",
-        "19": "!",
-        "1c": "$",
-        "1e": "&",
-        "10": "(",
-        "11": ")",
-        "12": "*",
-        "13": "+",
-        "14": ",",
-        "03": ";",
-        "05": "=",
-        "1d": "%",
-    }
-    decoded = []
-    for i in range(0, len(source), 2):
-        decoded.append(hex_map.get(source[i : i + 2], ""))
-    return "clock.json".join("".join(decoded).strip().split("clock"))
-
-
-def get_real_link(links):
-    decoded_links = []
-    for i in links:
-        real_final_link = []
-        if i == "Yt-mp4":
-            real_final_link = [
-                links[i][0],
-                9,
-            ]
-            decoded_links.append(real_final_link)
+    html = first_json["result"]
+    soup = BeautifulSoup(html, "html.parser")
+    links = []
+    for li in soup.select("li[data-link-id]"):
+        if li.text.strip() in ["DatSaV","BYFMS", "DGHG"]:
             continue
-        elif i in ENCRYPTED_SOURCES:
-            decoded = decode_link(links[i][0][2:])
-            dlink = get_streamurl(decoded)
-            if dlink:
-                real_final_link = [
-                    dlink,
-                    float(links[i][1]),
-                ]
-        elif i in SOURCES:
-            real_final_link = [
-                links[i][0],
-                float(links[i][1]),
-            ]
-        if len(real_final_link) == 2 and real_final_link[0] is not None:
-            r = rq.get(real_final_link[0], headers=HEADER, stream=True)
-            if r.status_code < 300:
-                decoded_links.append(real_final_link)
-    return sorted(decoded_links, key=lambda x: x[1], reverse=True)
+        links.append({"server": li.text.strip(), "link_id": li["data-link-id"]})
+    link = choice(links)
+    
+    source_url = URL + "ajax/sources?id=" + link["link_id"]
+    r = rq.get(source_url, headers=HEADER)
+    final_url = r.json()["result"]["url"]
+    final_source = (
+        final_url.rsplit("/", maxsplit=1)[0]
+        + "/getSources?id="
+        + final_url.split("/")[-1].split("?")[0]
+    )
+    return rq.get(final_source, headers={"Referer": final_url}).json()
+
+
+def select_best(playlist: str) -> dict:
+    streams = []
+
+    lines = playlist.splitlines()
+
+    for i, line in enumerate(lines):
+        if line.startswith("#EXT-X-STREAM-INF"):
+            attrs = line.split(":", 1)[1]
+
+            bandwidth = int(re.search(r"BANDWIDTH=(\d+)", attrs).group(1))
+
+            resolution_match = re.search(r"RESOLUTION=(\d+x\d+)", attrs)
+            resolution = resolution_match.group(1) if resolution_match else None
+
+            url = lines[i + 1].strip()
+
+            streams.append(
+                {"bandwidth": bandwidth, "resolution": resolution, "url": url}
+            )
+
+    best = max(streams, key=lambda x: x["bandwidth"])
+    return best
+
+
+def make_usable_playlist(url: str) -> str:
+    r = rq.get(url)
+    r.raise_for_status()
+
+    best = select_best(r.text)
+
+    variant_url = urljoin(url, best["url"])
+
+    host = url.split("/", maxsplit=3)
+    host.pop()
+    host = "/".join(host)
+
+    r = rq.get(variant_url)
+    r.raise_for_status()
+
+    directory = os.path.join(tempfile.gettempdir(), "aniwatch")
+    os.makedirs(directory, exist_ok=True)
+
+    path = os.path.join(directory, "playlist.m3u8")
+
+    playlist = []
+
+    for line in r.text.splitlines():
+        if line.startswith("#") or not line.strip():
+            playlist.append(line)
+        else:
+            # make ffmpeg recognize extensionless segments
+            playlist.append(host + line + "?ts")
+
+    with open(path, "w") as f:
+        f.write("\n".join(playlist))
+
+    return path
 
 
 def mpv_player(link, title, out):
-    header_args = []
-    formatted_headers = ""
-    if link["url"].find("mp4upload") == -1:
-        header_args = [f"{k.lower()}: {v}" for k, v in link["headers"].items()]
-        formatted_headers = ",".join([f"'{h}'" for h in header_args])
+    header_args = [f"{k.lower()}: {v}" for k, v in link["headers"].items()]
+    formatted_headers = ",".join([f"'{h}'" for h in header_args])
     player = mpv.MPV(
         ytdl=True,
         input_default_bindings=True,
@@ -482,13 +333,15 @@ def mpv_player(link, title, out):
         referrer=link.get("headers", {}).get("Referer", ""),
         hwdec="vaapi",
         title=title,
-        demuxer_lavf_o="protocol-whitelist=[hls,tcp,tls,file,crypto,http,https]",
+        demuxer_lavf_o="protocol_whitelist=[hls,tcp,tls,file,crypto,http,https]",
         cache="yes",
         demuxer_max_bytes=500000000,
         demuxer_max_back_bytes=100000000,
     )
     player.play(link.get("url", ""))
     player.wait_until_playing()
+    if link.get("sub", None):
+        player.command('sub-add', link.get("sub"), 'select')
     # global OUT
     out["dur"] = player.duration
 
@@ -550,6 +403,34 @@ def fallback_api(
             continue
 
 
+def migrate_cache():
+    """
+    Convert old cache formats here.
+    """
+
+    # Example old format:
+    # {
+    #   "173533": "KskTkSCsQHiGkYgAZ"
+    # }
+    CACHE_VERSION = 1.11
+
+    new_cache = {"version": CACHE_VERSION, "data": {}}
+    old_cache = get_id_from_file()
+    if old_cache.get("version", None) and old_cache["version"] > 1:
+        return
+    for key, value in old_cache.items():
+        if key == "version":
+            continue
+
+        if isinstance(value, str):
+            new_cache["data"][key] = {"allanime": value}
+
+        elif isinstance(value, dict):
+            new_cache["data"][key] = value
+
+    update_idfile(new_cache)
+
+
 def main():
     global OUT
     OUT = multiprocessing.Manager().dict()
@@ -562,6 +443,7 @@ def main():
     epAvailableForlast = False
     cached = False
     thr = None
+    migrate_cache()
     while True:
         thread_exitflag.clear()
         valid = []
@@ -644,21 +526,21 @@ def main():
                     "mediaId"
                 ]
             ),
-            "",
-        )
+            {},
+        ).get("aniwave", "")
         if not shows:
             shows = search_anime(
                 data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
                     "media"
                 ]["title"]["english"]
-            )["data"]["shows"]["edges"]
+            )
             file_write_flag = True
         if not shows:
             shows = search_anime(
                 data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
                     "media"
                 ]["title"]["romaji"]
-            )["data"]["shows"]["edges"]
+            )
             file_write_flag = True
         if not shows:
             print("-> No result found for the query.")
@@ -667,15 +549,13 @@ def main():
                 for i in range(len(shows)):
                     print(
                         str(i + 1) + ".",
-                        shows[i]["name"],
-                        "(Episodes:",
-                        str(shows[i]["availableEpisodes"]["sub"]) + ")",
+                        shows[i]["title"],
                     )
                 if len(shows) == 1:
                     print("Enter 1 to play, 0 - exit")
                 else:
                     print(f"Enter (1-{len(shows)}, 0 - exit)")
-                valid = [str(x) for x in range(0, len(shows) + 1)]
+                valid = [str(x) for x in range(len(shows) + 1)]
                 choice = input(">>> ").strip()
                 while choice not in valid:
                     choice = input(">>> ").strip()
@@ -687,7 +567,7 @@ def main():
                 choice = shows[int(choice) - 1]
             else:
                 choice = {}
-                choice["_id"] = shows
+                choice["id"] = shows
             last = get_last_ep(
                 data,
                 data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
@@ -695,11 +575,25 @@ def main():
                 ],
             )
             if file_write_flag:
-                file_data[
+                if file_data.get(
                     data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
                         "mediaId"
                     ]
-                ] = choice["_id"]
+                ):
+                    file_data[
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["mediaId"]
+                    ]["aniwave"] = choice["id"]
+                else:
+                    file_data[data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
+                        "mediaId"
+                    ]] = {}
+                    file_data[
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["mediaId"]
+                    ]["aniwave"] = choice["id"]
                 update_idfile(file_data)
             total_ep = data["data"]["MediaListCollection"]["lists"][0]["entries"][
                 query
@@ -722,33 +616,34 @@ def main():
             if last < total_ep:
                 if not cached:
                     # link = fallback_api(data['data']["MediaListCollection"]["lists"][0]["entries"][query]["mediaId"], last + 1)
-                    link = get_url([choice["_id"], last + 1])
+                    link = get_url([choice["id"], last + 1])
                 else:
                     link = preloaded_link
                     preloaded_link = ""
                     cached = False
                 finLink = None
+                sub = None
                 if link and type(link) == dict:
                     try:
-                        if link.get("data", None) and link["data"].get(
-                            "tobeparsed", None
-                        ):
-                            fin = decode_tobeparsed(link["data"]["tobeparsed"])
-                            print("parsed")
-                            finLink = get_real_link(fin)
-                            print("links fetched")
+                        if link.get("sources", None):
+                            finLink = make_usable_playlist(link['sources'])
+                        if link.get("tracks",None):
+                            for i in link['tracks']:
+                                if i.get("label","") == "ENG" and i.get("kind", "") == "captions":
+                                    sub = i.get("file", "")
+                                    break
                     except KeyboardInterrupt:
                         pass
-                print(link, finLink)
                 if finLink:
                     print(f"-> Playing episode {last + 1}")
                     thr = multiprocessing.Process(
                         target=mpv_player,
                         args=(
                             {
-                                "url": finLink[0][0],
+                                "url": finLink,
+                                "sub": sub,
                                 "headers": {
-                                    "Referer": ALLANI_REFR
+                                    "Referer": link['sources']
                                     if finLink[0][0].find("mp4upload") == -1
                                     else ""
                                 },
@@ -768,7 +663,7 @@ def main():
                     )
                     discord_msgThr.start()
                     if last + 1 < total_ep:
-                        preloaded_link = get_url([choice["_id"], last + 2])
+                        preloaded_link = get_url([choice["id"], last + 2])
                         if preloaded_link:
                             cached = True
                         else:
@@ -811,7 +706,7 @@ def main():
                         )
                         discord_msgThr.start()
                         if last + 1 < total_ep:
-                            preloaded_link = get_url([choice["_id"], last + 2])
+                            preloaded_link = get_url([choice["id"], last + 2])
                             if preloaded_link:
                                 cached = True
                             else:
