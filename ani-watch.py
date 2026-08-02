@@ -245,7 +245,8 @@ def get_url(data):
     html = first_json["result"]
     soup = BeautifulSoup(html, "html.parser")
     links = []
-    for li in soup.select("li[data-link-id]"):
+    sub_section = soup.select_one('div.type[data-type="sub"]')
+    for li in sub_section.select("li[data-link-id]"):
         if li.text.strip() in ["DatSaV","BYFMS", "DGHG"]:
             continue
         links.append({"server": li.text.strip(), "link_id": li["data-link-id"]})
