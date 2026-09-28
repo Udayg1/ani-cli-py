@@ -1,5 +1,3 @@
-import base64
-import hashlib
 import json
 import multiprocessing
 import os
@@ -7,27 +5,41 @@ import re
 import tempfile
 import threading
 import time
-from random import choice, random
 from urllib.parse import urljoin
 
 import mpv
 import pypresence
 import requests
-from bs4 import BeautifulSoup
-from Crypto.Cipher import AES
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 rq = requests.session()
+
+
+def get_cookie():
+    r = rq.post(
+        URL + "api/watch/session",
+        json={"token": ""},
+        headers={
+            "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
+            "Referer": REFR,
+        },
+    )
+    return r.headers["Set-Cookie"].split(";")[0]
+
+
 rq.max_redirects = 100
 PATH = os.path.expanduser("~") + "/.local/share/ani-watch/"
 ANILIST_URL = "https://graphql.anilist.co"
 ANILIST_USER = ""
 DISCORD_CLIENT = "1408296956266025022"
-REFR = "https://aniwaves.ru/"
+URL = "https://anichan.to/"
+REFR = URL
 CLIENT_ID = "28320"
 TOKEN = ""
-HEADER = {"User-agent": "Mozilla/5.0 Firefox/153.0", "Referer": REFR}
-URL = "https://aniwaves.ru/"
+HEADER = {
+    "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
+    "Referer": REFR,
+    "Cookie": get_cookie(),
+}
 FALLBACK_SOURCE = "https://anikuro.to/api/v1/sources/"
 FALLBACK_MAIN = "https://anikuro.to/"
 OUT = None
@@ -41,25 +53,29 @@ def mkdir():
 
 
 def search_anime(query):
-    r = rq.get(
-        URL + "ajax/anime/search?keyword=" + "+".join(query.split()), headers=HEADER
-    )
-
+    r = rq.get(URL + "api/suggest?q=" + "%20".join(query.split()), headers=HEADER)
     data = r.json()
 
-    html = data["result"]["html"]
+    results = data["results"]  # {results: [{}, {}, ...]}
+    out = []
+    for item in results:
+        title = item["title"]  # {"title": str}
+        url = str(item["id"])  # {"id": int}
+        out.append({"title": title, "id": url})
 
-    soup = BeautifulSoup(html, "html.parser")
-    results = []
-    for item in soup.select("a.item"):
-        title = item.select_one(".d-title").text.strip()
-        url = item["href"].split("/")[-1]
-        results.append({"title": title, "id": url})
     return results
 
 
+def get_slug(id) -> str:
+    html = rq.get(f"https://anichan.to/anime/{id}", headers=HEADER).text
+
+    m = re.search(rf'/anime/{id}/([a-z0-9-]+?)(?:/\d+)?["\'\s]', html)
+    slug = m.group(1) if m else ""
+    return slug
+
+
 def get_last_ep(_data, _id):
-    for i in range(0, len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
+    for i in range(len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
         if (
             _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["mediaId"]
             == _id
@@ -72,7 +88,7 @@ def get_last_ep(_data, _id):
 
 
 def getEpsWhenComplete(_data, anime_id):
-    for i in range(0, len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
+    for i in range(len(_data["data"]["MediaListCollection"]["lists"][0]["entries"])):
         if (
             _data["data"]["MediaListCollection"]["lists"][0]["entries"][i]["mediaId"]
             == anime_id
@@ -158,7 +174,7 @@ def modify_data(_data, anime_id, last):
         }
 
     head = {"Authorization": f"Bearer {TOKEN}"}
-    r = rq.post(ANILIST_URL, json=data, headers=head)
+    _ = rq.post(ANILIST_URL, json=data, headers=head)
     return out
 
 
@@ -237,30 +253,32 @@ def get_url(data):
     """
     id = data[0]
     episode = data[1]
-    numeric_id = id.split("-")[-1]
-    api_url = URL + "ajax/server/list?servers=" + numeric_id + "&eps=" + str(episode)
-    r = rq.get(api_url, headers=HEADER)
-    first_json = r.json()
-
-    html = first_json["result"]
-    soup = BeautifulSoup(html, "html.parser")
-    links = []
-    sub_section = soup.select_one('div.type[data-type="sub"]')
-    for li in sub_section.select("li[data-link-id]"):
-        if li.text.strip() in ["DatSaV","BYFMS", "DGHG"]:
-            continue
-        links.append({"server": li.text.strip(), "link_id": li["data-link-id"]})
-    link = choice(links)
-    
-    source_url = URL + "ajax/sources?id=" + link["link_id"]
-    r = rq.get(source_url, headers=HEADER)
-    final_url = r.json()["result"]["url"]
-    final_source = (
-        final_url.rsplit("/", maxsplit=1)[0]
-        + "/getSources?id="
-        + final_url.split("/")[-1].split("?")[0]
+    numeric_id = id
+    api_url = (
+        URL
+        + "api/watch/servers?anilistId="
+        + str(numeric_id)
+        + "&ep="
+        + str(episode)
+        + "&cagtegory=sub"
     )
-    return rq.get(final_source, headers={"Referer": final_url}).json()
+    cookie = {HEADER["Cookie"].split("=")[0]: HEADER["Cookie"].split("=")[1]}
+    r = rq.get(api_url, headers=HEADER, cookies=cookie)
+    first_json = r.json()
+    
+    result = first_json["servers"]
+    links = []
+    for item in result:
+        if not item.get("stream", None):
+            continue
+        links.append(
+            {
+                "stream": item["stream"],
+                "sub": item["subtitles"][0]["url"],
+                "rank": item["rank"],
+            }
+        )
+    return sorted(links, key=lambda x: float(x["rank"]))
 
 
 def select_best(playlist: str) -> dict:
@@ -327,6 +345,7 @@ def mpv_player(link, title, out):
     formatted_headers = ",".join([f"'{h}'" for h in header_args])
     player = mpv.MPV(
         ytdl=True,
+        hr_seek="yes",
         input_default_bindings=True,
         input_vo_keyboard=True,
         osc=True,
@@ -342,7 +361,7 @@ def mpv_player(link, title, out):
     player.play(link.get("url", ""))
     player.wait_until_playing()
     if link.get("sub", None):
-        player.command('sub-add', link.get("sub"), 'select')
+        player.command("sub-add", link.get("sub"), "select")
     # global OUT
     out["dur"] = player.duration
 
@@ -435,13 +454,13 @@ def migrate_cache():
 def main():
     global OUT
     OUT = multiprocessing.Manager().dict()
-    connected = False
     thread_exitflag = threading.Event()
     preloaded_link = ""
     last_option = ""
     lock = threading.Lock()
     discord_msgThr = None
     epAvailableForlast = False
+    source = "anichan"
     cached = False
     thr = None
     migrate_cache()
@@ -464,7 +483,7 @@ def main():
                 if discord_msgThr and discord_msgThr.is_alive():
                     thread_exitflag.set()
                 return
-            for i in range(0, anilist_entries):
+            for i in range(anilist_entries):
                 prog = data["data"]["MediaListCollection"]["lists"][0]["entries"][i][
                     "progress"
                 ]
@@ -528,7 +547,7 @@ def main():
                 ]
             ),
             {},
-        ).get("aniwave", "")
+        ).get(source, "")
         if not shows:
             shows = search_anime(
                 data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
@@ -585,16 +604,18 @@ def main():
                         data["data"]["MediaListCollection"]["lists"][0]["entries"][
                             query
                         ]["mediaId"]
-                    ]["aniwave"] = choice["id"]
+                    ][source] = choice["id"]
                 else:
-                    file_data[data["data"]["MediaListCollection"]["lists"][0]["entries"][query][
-                        "mediaId"
-                    ]] = {}
                     file_data[
                         data["data"]["MediaListCollection"]["lists"][0]["entries"][
                             query
                         ]["mediaId"]
-                    ]["aniwave"] = choice["id"]
+                    ] = {}
+                    file_data[
+                        data["data"]["MediaListCollection"]["lists"][0]["entries"][
+                            query
+                        ]["mediaId"]
+                    ][source] = choice["id"]
                 update_idfile(file_data)
             total_ep = data["data"]["MediaListCollection"]["lists"][0]["entries"][
                 query
@@ -617,24 +638,19 @@ def main():
             if last < total_ep:
                 if not cached:
                     # link = fallback_api(data['data']["MediaListCollection"]["lists"][0]["entries"][query]["mediaId"], last + 1)
-                    link = get_url([choice["id"], last + 1])
+                    link = get_url(
+                        [choice["id"], last + 1]
+                    )  # {stream: url, sub: url | None} sorted according to rank
                 else:
                     link = preloaded_link
                     preloaded_link = ""
                     cached = False
                 finLink = None
                 sub = None
-                if link and type(link) == dict:
-                    try:
-                        if link.get("sources", None):
-                            finLink = make_usable_playlist(link['sources'])
-                        if link.get("tracks",None):
-                            for i in link['tracks']:
-                                if i.get("label","") == "ENG" and i.get("kind", "") == "captions":
-                                    sub = i.get("file", "")
-                                    break
-                    except KeyboardInterrupt:
-                        pass
+                
+                if link:
+                    finLink = link[0]["stream"]
+                    sub = link[0]["sub"]
                 if finLink:
                     print(f"-> Playing episode {last + 1}")
                     thr = multiprocessing.Process(
@@ -644,7 +660,7 @@ def main():
                                 "url": finLink,
                                 "sub": sub,
                                 "headers": {
-                                    "Referer": link['sources']
+                                    "Referer": URL
                                     if finLink[0][0].find("mp4upload") == -1
                                     else ""
                                 },
@@ -751,9 +767,8 @@ def main():
             else:
                 epAvailableForlast = False
                 print("-> No new episodes available.")
-        if discord_msgThr:
-            if discord_msgThr.is_alive():
-                thread_exitflag.set()
+        if discord_msgThr and discord_msgThr.is_alive():
+            thread_exitflag.set()
 
 
 if __name__ == "__main__":
