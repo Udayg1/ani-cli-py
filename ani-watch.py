@@ -268,13 +268,18 @@ def get_url(data):
     
     result = first_json["servers"]
     links = []
+    
     for item in result:
         if not item.get("stream", None):
             continue
+        sub_obj = item.get("subtitles")
+        sub = None
+        if sub_obj:
+            sub = sub_obj[0].get("url", None)
         links.append(
             {
                 "stream": item["stream"],
-                "sub": item["subtitles"][0]["url"],
+                "sub": sub,
                 "rank": item["rank"],
             }
         )
