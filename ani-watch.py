@@ -265,17 +265,19 @@ def get_url(data):
     cookie = {HEADER["Cookie"].split("=")[0]: HEADER["Cookie"].split("=")[1]}
     r = rq.get(api_url, headers=HEADER, cookies=cookie)
     first_json = r.json()
-    
+
     result = first_json["servers"]
     links = []
-    
+
     for item in result:
         if not item.get("stream", None):
             continue
         sub_obj = item.get("subtitles")
         sub = None
         if sub_obj:
-            sub = sub_obj[0].get("url", None)
+            for i in sub_obj:
+                if i.get("lang", None) == "English":
+                    sub = i.get("url", None)
         links.append(
             {
                 "stream": item["stream"],
@@ -283,6 +285,7 @@ def get_url(data):
                 "rank": item["rank"],
             }
         )
+
     return sorted(links, key=lambda x: float(x["rank"]))
 
 
@@ -652,7 +655,7 @@ def main():
                     cached = False
                 finLink = None
                 sub = None
-                
+
                 if link:
                     finLink = link[0]["stream"]
                     sub = link[0]["sub"]
