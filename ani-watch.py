@@ -370,13 +370,16 @@ def mpv_player(link, title, out):
     player.wait_until_playing()
     if link.get("sub", None):
         player.command("sub-add", link.get("sub"), "select")
-    # global OUT
-    out["dur"] = player.duration
 
     @player.property_observer("time-pos")
     def get_time(_name, value):
         if value:
             out["time"] = value
+
+    @player.property_observer("duration")
+    def get_dur(_name, value):
+        if value:
+            out["dur"] = player.duration
 
     player.wait_for_playback()
 
