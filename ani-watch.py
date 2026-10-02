@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import json
 import multiprocessing
 import os
@@ -10,11 +13,17 @@ from urllib.parse import urljoin
 import mpv
 import pypresence
 import requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 rq = requests.session()
 
+ws_n = ""
+c = "rwn3BLp8e6Rquu3XOy9/g/HmviKiER3QnFnVDsSJvdk="
+k = "D6cfmO9rzOJn9RwCVohBQiPk9ajA/uFXYVjOm+Ps6T0="
+
 
 def get_cookie():
+    global ws_n
     r = rq.post(
         URL + "api/watch/session",
         json={"token": ""},
@@ -23,10 +32,10 @@ def get_cookie():
             "Referer": REFR,
         },
     )
+    ws_n = r.json()["n"]
     return r.headers["Set-Cookie"].split(";")[0]
 
 
-rq.max_redirects = 100
 PATH = os.path.expanduser("~") + "/.local/share/ani-watch/"
 ANILIST_URL = "https://graphql.anilist.co"
 ANILIST_USER = ""
@@ -39,11 +48,41 @@ HEADER = {
     "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
     "Referer": REFR,
     "Cookie": get_cookie(),
+    "X-Wk": "d9fc2afe",
 }
 FALLBACK_SOURCE = "https://anikuro.to/api/v1/sources/"
 FALLBACK_MAIN = "https://anikuro.to/"
 OUT = None
 RPC = pypresence.Presence(DISCORD_CLIENT)
+
+
+def decode_b64(s: str) -> bytes:
+    # Swap for the real I(): this is base64/base64url (padding handled)
+    s = s.replace("-", "+").replace("_", "/")
+    return base64.b64decode(s + "=" * (-len(s) % 4))
+    # hex:  return bytes.fromhex(s)
+    # utf8: return s.encode()
+
+
+def decrypt(t: dict, e: str = ws_n, C: str = c, k: str = k):
+    """
+    t: {"i": iv_string, "d": ciphertext_string}
+    e: the localStorage value
+    C, k: the two constant strings
+    Returns the parsed JSON, or None on failure (like the JS).
+    """
+
+    if not e:
+        return None
+    try:
+        n, i = decode_b64(C), decode_b64(k)
+        xored = bytes(n[j] ^ (i[j] if j < len(i) else 0) for j in range(len(n)))
+        key = hmac.new(xored, e.encode("utf-8"), hashlib.sha256).digest()
+        pt = AESGCM(key).decrypt(decode_b64(t["i"]), decode_b64(t["d"]), None)
+        return json.loads(pt.decode("utf-8"))
+    except Exception as e:
+        print("error in decryption", e)
+        return None
 
 
 def mkdir():
@@ -260,13 +299,13 @@ def get_url(data):
         + str(numeric_id)
         + "&ep="
         + str(episode)
-        + "&cagtegory=sub"
+        + "&cagtegory=sub&tier=fast"
     )
     cookie = {HEADER["Cookie"].split("=")[0]: HEADER["Cookie"].split("=")[1]}
     r = rq.get(api_url, headers=HEADER, cookies=cookie)
     first_json = r.json()
-
-    result = first_json["servers"]
+    decrypted = decrypt(first_json, ws_n)
+    result = decrypted["servers"]
     links = []
 
     for item in result:
