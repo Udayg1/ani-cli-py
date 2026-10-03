@@ -18,8 +18,30 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 rq = requests.session()
 
 ws_n = ""
-c = "rwn3BLp8e6Rquu3XOy9/g/HmviKiER3QnFnVDsSJvdk="
-k = "D6cfmO9rzOJn9RwCVohBQiPk9ajA/uFXYVjOm+Ps6T0="
+P = ""
+I = ""
+wk = ""
+
+
+def set_keys():
+    global P, I, wk
+    r = rq.get("https://anichan.to/_next/static/chunks/7621-a2579e7bc18aa62f.js")
+    js_text = r.text
+    p_loc = js_text[
+        js_text.find('P="') + 3 : js_text.find('"', js_text.find('P="') + 4)
+    ]
+    P = p_loc
+    i_loc = js_text[
+        js_text.find('I="') + 3 : js_text.find('"', js_text.find('I="') + 4)
+    ]
+    I = i_loc
+    wk_loc = js_text[
+        js_text.find('O="') + 3 : js_text.find('"', js_text.find('O="') + 4)
+    ]
+    wk = wk_loc
+
+
+set_keys()
 
 
 def get_cookie():
@@ -48,7 +70,7 @@ HEADER = {
     "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
     "Referer": REFR,
     "Cookie": get_cookie(),
-    "X-Wk": "d9fc2afe",
+    "X-Wk": wk,
 }
 FALLBACK_SOURCE = "https://anikuro.to/api/v1/sources/"
 FALLBACK_MAIN = "https://anikuro.to/"
@@ -64,7 +86,7 @@ def decode_b64(s: str) -> bytes:
     # utf8: return s.encode()
 
 
-def decrypt(t: dict, e: str = ws_n, C: str = c, k: str = k):
+def decrypt(t: dict, e: str = ws_n, P: str = P, I: str = I):
     """
     t: {"i": iv_string, "d": ciphertext_string}
     e: the localStorage value
@@ -75,7 +97,7 @@ def decrypt(t: dict, e: str = ws_n, C: str = c, k: str = k):
     if not e:
         return None
     try:
-        n, i = decode_b64(C), decode_b64(k)
+        n, i = decode_b64(P), decode_b64(I)
         xored = bytes(n[j] ^ (i[j] if j < len(i) else 0) for j in range(len(n)))
         key = hmac.new(xored, e.encode("utf-8"), hashlib.sha256).digest()
         pt = AESGCM(key).decrypt(decode_b64(t["i"]), decode_b64(t["d"]), None)
@@ -89,6 +111,47 @@ def mkdir():
     os.system(f"mkdir -p {PATH}")
     os.system(f"touch {PATH}info.txt")
     os.system(f"touch {PATH}token.txt")
+
+
+def get_url(data):
+    """
+    index 0 has ep id and index 1 has episode number. returns response json
+    """
+    id = data[0]
+    episode = data[1]
+    numeric_id = id
+    api_url = (
+        URL
+        + "api/watch/servers?anilistId="
+        + str(numeric_id)
+        + "&ep="
+        + str(episode)
+        + "&cagtegory=sub&tier=fast"
+    )
+    r = rq.get(api_url, headers=HEADER)
+    first_json = r.json()
+    decrypted = decrypt(first_json, ws_n)
+    result = decrypted["servers"]
+    links = []
+
+    for item in result:
+        if not item.get("stream", None):
+            continue
+        sub_obj = item.get("subtitles")
+        sub = None
+        if sub_obj:
+            for i in sub_obj:
+                if i.get("lang", None) == "English":
+                    sub = i.get("url", None)
+        links.append(
+            {
+                "stream": item["stream"],
+                "sub": sub,
+                "rank": item["rank"],
+            }
+        )
+
+    return sorted(links, key=lambda x: float(x["rank"]))
 
 
 def search_anime(query):
@@ -284,48 +347,6 @@ def get_id_from_file():
 def update_idfile(file_data):
     with open(PATH + "info.txt", "w") as f:
         f.write(json.dumps(file_data))
-
-
-def get_url(data):
-    """
-    index 0 has ep id and index 1 has episode number. returns response json
-    """
-    id = data[0]
-    episode = data[1]
-    numeric_id = id
-    api_url = (
-        URL
-        + "api/watch/servers?anilistId="
-        + str(numeric_id)
-        + "&ep="
-        + str(episode)
-        + "&cagtegory=sub&tier=fast"
-    )
-    cookie = {HEADER["Cookie"].split("=")[0]: HEADER["Cookie"].split("=")[1]}
-    r = rq.get(api_url, headers=HEADER, cookies=cookie)
-    first_json = r.json()
-    decrypted = decrypt(first_json, ws_n)
-    result = decrypted["servers"]
-    links = []
-
-    for item in result:
-        if not item.get("stream", None):
-            continue
-        sub_obj = item.get("subtitles")
-        sub = None
-        if sub_obj:
-            for i in sub_obj:
-                if i.get("lang", None) == "English":
-                    sub = i.get("url", None)
-        links.append(
-            {
-                "stream": item["stream"],
-                "sub": sub,
-                "rank": item["rank"],
-            }
-        )
-
-    return sorted(links, key=lambda x: float(x["rank"]))
 
 
 def select_best(playlist: str) -> dict:
