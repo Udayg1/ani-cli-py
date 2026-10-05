@@ -150,8 +150,9 @@ def get_url(data):
                 "rank": item["rank"],
             }
         )
-
-    return sorted(links, key=lambda x: float(x["rank"]))
+    best = sorted(links, key=lambda x: float(x["rank"]))[0]
+    best_server = select_best(rq.get(best.get("stream")).text)
+    return {"stream": best_server.get("url"), "sub": best.get("sub")}
 
 
 def search_anime(query):
@@ -720,8 +721,8 @@ def main():
                 sub = None
 
                 if link:
-                    finLink = link[0]["stream"]
-                    sub = link[0]["sub"]
+                    finLink = link.get("stream")
+                    sub = link["sub"]
                 if finLink:
                     print(f"-> Playing episode {last + 1}")
                     thr = multiprocessing.Process(
