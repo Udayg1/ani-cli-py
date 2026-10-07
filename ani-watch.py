@@ -24,8 +24,23 @@ wk = ""
 
 
 def set_keys():
+    header = {
+            "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
+            "Referer": "https://anichan.to/",
+        }
+    html = requests.get("https://anichan.to/", headers=header, timeout=15).text
+
+    # Match any .js reference (script src, preload hrefs, or paths inside inline Next.js JSON)
+    pattern = re.compile(r'["\'(]([^"\'()\s]*?/' + re.escape("7621") + r'[^"\'()\s/]*?\.js)')
+    match = pattern.search(html)
+    if not match:
+        return
+    path = match.group(1).replace("\\u002F", "/")
     global P, I, wk
-    r = rq.get("https://anichan.to/_next/static/chunks/7621-a2579e7bc18aa62f.js")
+    r = rq.get(
+        f"https://anichan.to/{path}",
+        headers=header,
+    )
     js_text = r.text
     p_loc = js_text[
         js_text.find('P="') + 3 : js_text.find('"', js_text.find('P="') + 4)
