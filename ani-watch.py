@@ -23,15 +23,56 @@ I = ""
 wk = ""
 
 
+def extract_keys(js: str):
+    # 1. anchor: the function containing AES-GCM decrypt
+    idx = js.find("'AES-GCM'") if "'AES-GCM'" in js else js.find('"AES-GCM"')
+    start = js.rfind("async function", 0, idx)
+    body = js[start : js.find("catch", idx)]
+
+    # 2. roles: `let n=DEC(CONST1), a=DEC(CONST2)` followed by the XOR loop
+    m = re.search(r"(\w+)=(\w+)\((\w+)\),\s*(\w+)=\2\((\w+)\)", body)
+    decoder, const1, const2 = m.group(2), m.group(3), m.group(5)
+
+    # 3. localStorage key helper: function that calls getItem(KEY)
+    key_name_var = re.search(r"localStorage\.getItem\((\w+)\)", js).group(1)
+
+    def literal(name):
+        r = re.search(
+            rf'(?:\b(?:const|let|var)\s+|,\s*){name}\s*=\s*([\'"`])(.*?)\1', js
+        )
+        return r.group(2)
+
+    return {
+        "decoder_name": decoder,
+        "C": literal(const1),
+        "K": literal(const2),
+        "storage_key": literal(key_name_var),
+    }
+
+
+def extract_k(js: str):
+    m = re.search(r"""['"]X-Wk['"]\s*:\s*(\w+)""", js)
+    if not m:
+        return None
+    var = m.group(1)
+    # declaration: `k="..."`, `let k = '...'`, or `,k="..."` in a var list
+    d = re.search(
+        rf"""(?:\b(?:const|let|var)\s+|[,;{{}}\s]){var}\s*=\s*(['"`])(.*?)\1""", js
+    )
+    return d.group(2) if d else None
+
+
 def set_keys():
     header = {
-            "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
-            "Referer": "https://anichan.to/",
-        }
+        "User-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0",
+        "Referer": "https://anichan.to/",
+    }
     html = requests.get("https://anichan.to/", headers=header, timeout=15).text
 
     # Match any .js reference (script src, preload hrefs, or paths inside inline Next.js JSON)
-    pattern = re.compile(r'["\'(]([^"\'()\s]*?/' + re.escape("7621") + r'[^"\'()\s/]*?\.js)')
+    pattern = re.compile(
+        r'["\'(]([^"\'()\s]*?/' + re.escape("7621") + r'[^"\'()\s/]*?\.js)'
+    )
     match = pattern.search(html)
     if not match:
         return
@@ -42,18 +83,10 @@ def set_keys():
         headers=header,
     )
     js_text = r.text
-    p_loc = js_text[
-        js_text.find('P="') + 3 : js_text.find('"', js_text.find('P="') + 4)
-    ]
-    P = p_loc
-    i_loc = js_text[
-        js_text.find('I="') + 3 : js_text.find('"', js_text.find('I="') + 4)
-    ]
-    I = i_loc
-    wk_loc = js_text[
-        js_text.find('O="') + 3 : js_text.find('"', js_text.find('O="') + 4)
-    ]
-    wk = wk_loc
+    keys = extract_keys(js_text)
+    wk = extract_k(js_text)
+    P = keys.get("C")
+    I = keys.get("K")
 
 
 set_keys()
