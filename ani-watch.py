@@ -189,7 +189,10 @@ def get_url(data):
         sub = None
         if sub_obj:
             for i in sub_obj:
-                if i.get("lang", None) == "English":
+                if (
+                    i.get("lang", "").find("English") != -1
+                    and i.get("lang", "").lower().find("forced") == -1
+                ):
                     sub = i.get("url", None)
         links.append(
             {
