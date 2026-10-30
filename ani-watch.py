@@ -1,3 +1,5 @@
+#!/usr/bin/env python3.13
+
 import base64
 import hashlib
 import hmac
