@@ -196,9 +196,13 @@ def get_url(data):
                     and i.get("lang", "").lower().find("forced") == -1
                 ):
                     sub = i.get("url", None)
+
+        stream = item["stream"]
+        if item.get("host") is not None and item.get("host").lower() == 'anichan':
+            stream = "https://anichan.to" + stream
         links.append(
             {
-                "stream": item["stream"],
+                "stream": stream,
                 "sub": sub,
                 "rank": item["rank"],
             }
