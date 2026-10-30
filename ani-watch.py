@@ -198,8 +198,8 @@ def get_url(data):
                     sub = i.get("url", None)
 
         stream = item["stream"]
-        if item.get("host") is not None and item.get("host").lower() == 'anichan':
-            stream = "https://anichan.to" + stream
+        if item.get("host") is not None and item.get("host").lower() == "anichan":
+            continue
         links.append(
             {
                 "stream": stream,
@@ -208,7 +208,7 @@ def get_url(data):
             }
         )
     best = sorted(links, key=lambda x: float(x["rank"]))[0]
-    best_server = select_best(rq.get(best.get("stream")).text)
+    best_server = select_best(best.get("stream"))
     return {"stream": best_server.get("url"), "sub": best.get("sub")}
 
 
@@ -407,9 +407,28 @@ def update_idfile(file_data):
         f.write(json.dumps(file_data))
 
 
-def select_best(playlist: str) -> dict:
-    streams = []
+def get_hostname(url):
+    # Remove the protocol/scheme if present
+    if "://" in url:
+        url = url.split("://", 1)[1]
+    elif url.startswith("//"):
+        url = url[2:]
 
+    # Remove any paths, queries, or fragments (everything after the first '/')
+    url = url.split("/", 1)[0]
+
+    # Remove user authentication details (everything before '@') if present
+    if "@" in url:
+        url = url.split("@", 1)[1]
+
+    # Remove port numbers (everything after the ':')
+    url = url.split(":", 1)[0]
+    return url
+
+
+def select_best(host_url: str) -> dict:
+    streams = []
+    playlist = rq.get(host_url).text
     lines = playlist.splitlines()
 
     for i, line in enumerate(lines):
@@ -428,6 +447,8 @@ def select_best(playlist: str) -> dict:
             )
 
     best = max(streams, key=lambda x: x["bandwidth"])
+    if best.get("url") is not None and best.get("url").lower().startswith("/"):
+        best["url"] = "https://" + get_hostname(host_url) + best["url"]
     return best
 
 
